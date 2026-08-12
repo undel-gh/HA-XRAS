@@ -1,1 +1,33 @@
-
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "XRAS geomagnetic activity",
+        "description": "Data by the Solar Astronomy Laboratory, IKI RAS (xras.ru).\n\nEnter a region name such as 'moscow' or 'riga' and the code will be resolved automatically, or give the code directly: RAL5 (Moscow), RIK0 (Riga), UP03 (generic UTC+03 zone).",
+        "data": {
+          "code": "Region or code",
+          "scan_interval": "Polling interval, s"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not resolve the region or download the data. Try entering the code directly, e.g. RAL5."
+    },
+    "abort": {
+      "already_configured": "This region is already configured"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "code": "Region or code",
+          "scan_interval": "Polling interval, s"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not resolve the region or download the data."
+    }
+  }
+}
