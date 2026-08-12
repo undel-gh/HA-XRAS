@@ -1,0 +1,240 @@
+"""Сенсоры геомагнитной обстановки."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorEntityDescription,
+    SensorStateClass,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
+
+from .const import DOMAIN, STORM_LEVELS
+from .coordinator import XrasCoordinator
+
+
+@dataclass(frozen=True, kw_only=True)
+class XrasSensorDescription(SensorEntityDescription):
+    """Описание сенсора с функциями значения и атрибутов."""
+
+    value_fn: Callable[[dict], Any]
+    attrs_fn: Callable[[dict], dict] | None = None
+
+
+def _kp_attrs(data: dict) -> dict:
+    """Ряды для графиков и «сайтовое» округлённое значение."""
+    kp = data.get("kp_current")
+    return {
+        "kp_display": round(kp) if kp is not None else None,
+        "measured_at": data["kp_current_ts"].isoformat()
+        if data.get("kp_current_ts")
+        else None,
+        "timezone": data.get("tzone"),
+        "source": data.get("source"),
+        "series": [
+            {"time": point["ts"].isoformat(), "kp": point["kp"]}
+            for point in data.get("series", [])
+        ],
+        "forecast_series": [
+            {"time": point["ts"].isoformat(), "kp": point["kp"]}
+            for point in data.get("forecast_series", [])
+        ],
+    }
+
+
+def _daily_attrs(data: dict) -> dict:
+    return {
+        "daily": [
+            {"date": row["date"].isoformat(), "kp": row["kp"]}
+            for row in data.get("daily", [])
+        ],
+        "daily_forecast": [
+            {"date": row["date"].isoformat(), "kp": row["kp"]}
+            for row in data.get("daily_forecast", [])
+        ],
+    }
+
+
+def _month_attrs(data: dict) -> dict:
+    """Помесячная история: Kp, Ap, F10.7 и число пятен по суткам."""
+    return {
+        "storm_days": data.get("storm_days_month"),
+        "history": [
+            {
+                "date": row["date"].isoformat(),
+                "kp": row["kp"],
+                "ap": row["ap"],
+                "f10": row["f10"],
+                "sn": row["sn"],
+            }
+            for row in data.get("month_history", [])
+        ],
+    }
+
+
+SENSORS: tuple[XrasSensorDescription, ...] = (
+    XrasSensorDescription(
+        key="kp_current",
+        name="Индекс Kp",
+        icon="mdi:magnet",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_current"),
+        attrs_fn=_kp_attrs,
+    ),
+    XrasSensorDescription(
+        key="storm_level",
+        name="Геомагнитная обстановка",
+        icon="mdi:weather-lightning",
+        device_class=SensorDeviceClass.ENUM,
+        options=[level[2] for level in STORM_LEVELS],
+        value_fn=lambda data: data.get("level_name"),
+        attrs_fn=lambda data: {"level_key": data.get("level_key")},
+    ),
+    XrasSensorDescription(
+        key="kp_max_today",
+        name="Максимум Kp за сутки",
+        icon="mdi:calendar-today",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_max_today"),
+        attrs_fn=_daily_attrs,
+    ),
+    XrasSensorDescription(
+        key="kp_max_month",
+        name="Максимум Kp за месяц",
+        icon="mdi:calendar-month",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_max_month"),
+        attrs_fn=_month_attrs,
+    ),
+    XrasSensorDescription(
+        key="storm_days_month",
+        name="Дней с бурей в этом месяце",
+        icon="mdi:counter",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="дн.",
+        value_fn=lambda data: data.get("storm_days_month"),
+    ),
+    XrasSensorDescription(
+        key="kp_max_24h",
+        name="Максимум Kp за 24 часа",
+        icon="mdi:chart-line",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_max_24h"),
+    ),
+    XrasSensorDescription(
+        key="kp_forecast_max_24h",
+        name="Прогноз Kp на 24 часа",
+        icon="mdi:chart-timeline-variant",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_forecast_max_24h"),
+        attrs_fn=lambda data: {"level": data.get("forecast_level_name")},
+    ),
+    XrasSensorDescription(
+        key="kp_forecast_max_3d",
+        name="Прогноз Kp на трое суток",
+        icon="mdi:chart-timeline-variant-shimmer",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=2,
+        value_fn=lambda data: data.get("kp_forecast_max_3d"),
+    ),
+    XrasSensorDescription(
+        key="ap",
+        name="Индекс Ap",
+        icon="mdi:sine-wave",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.get("ap"),
+        attrs_fn=lambda data: {"forecast": data.get("ap_forecast")},
+    ),
+    XrasSensorDescription(
+        key="f10",
+        name="Поток F10.7",
+        icon="mdi:radio-tower",
+        native_unit_of_measurement="s.f.u.",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        value_fn=lambda data: data.get("f10"),
+        attrs_fn=lambda data: {"forecast": data.get("f10_forecast")},
+    ),
+    XrasSensorDescription(
+        key="sn",
+        name="Число солнечных пятен",
+        icon="mdi:white-balance-sunny",
+        state_class=SensorStateClass.MEASUREMENT,
+        suggested_display_precision=0,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get("sn"),
+    ),
+    XrasSensorDescription(
+        key="updated_at",
+        name="Обновлено",
+        icon="mdi:clock-outline",
+        device_class=SensorDeviceClass.TIMESTAMP,
+        entity_registry_enabled_default=False,
+        value_fn=lambda data: data.get("updated_at"),
+    ),
+)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    coordinator: XrasCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities(
+        XrasSensor(coordinator, entry, description) for description in SENSORS
+    )
+
+
+def build_device_info(coordinator: XrasCoordinator, entry: ConfigEntry) -> DeviceInfo:
+    return DeviceInfo(
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=f"Геомагнитная обстановка ({coordinator.code})",
+        manufacturer="ИКИ РАН, Лаборатория солнечной астрономии",
+        model="xras.ru",
+        configuration_url="https://xras.ru/magnetic_storms.html",
+    )
+
+
+class XrasSensor(CoordinatorEntity[XrasCoordinator], SensorEntity):
+    """Сенсор на основе данных XRAS."""
+
+    _attr_has_entity_name = True
+    entity_description: XrasSensorDescription
+
+    def __init__(
+        self,
+        coordinator: XrasCoordinator,
+        entry: ConfigEntry,
+        description: XrasSensorDescription,
+    ) -> None:
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_device_info = build_device_info(coordinator, entry)
+
+    @property
+    def native_value(self) -> Any:
+        if not self.coordinator.data:
+            return None
+        return self.entity_description.value_fn(self.coordinator.data)
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if not self.coordinator.data or not self.entity_description.attrs_fn:
+            return None
+        return self.entity_description.attrs_fn(self.coordinator.data)

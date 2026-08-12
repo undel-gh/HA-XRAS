@@ -1,0 +1,11 @@
+{
+  "domain": "xras_geomagnetic",
+  "name": "XRAS — Геомагнитная обстановка",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://xras.ru/magnetic_storms.html",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "requirements": [],
+  "version": "2.1.0"
+}
