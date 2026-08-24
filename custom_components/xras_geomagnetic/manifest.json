@@ -1,14 +1,12 @@
 {
   "domain": "xras_geomagnetic",
   "name": "XRAS — Геомагнитная обстановка",
-  "codeowners": [
-    "@undel-gh", "@claude"
-  ],
+  "codeowners": [],
   "config_flow": true,
   "documentation": "https://xras.ru/magnetic_storms.html",
   "integration_type": "service",
   "iot_class": "cloud_polling",
   "requirements": [],
   "version": "2.2.0",
-  "issue_tracker": "https://github.com/undel-gh/HA-XRAS/issues"
+  "issue_tracker": "https://github.com/EXAMPLE/xras-geomagnetic/issues"
 }

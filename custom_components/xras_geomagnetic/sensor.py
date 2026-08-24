@@ -155,7 +155,7 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_forecast_max_24h"),
-        attrs_fn=lambda data: {"level": data.get("forecast_level_key")},
+        attrs_fn=lambda data: {"level_key": data.get("forecast_level_key")},
     ),
     XrasSensorDescription(
         key="kp_forecast_max_3d",

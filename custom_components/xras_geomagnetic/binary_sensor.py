@@ -49,7 +49,7 @@ class XrasStormNow(_Base):
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
-        return {"kp": data.get("kp_current"), "level": data.get("level_key")}
+        return {"kp": data.get("kp_current"), "level_key": data.get("level_key")}
 
 
 class XrasStormExpected(_Base):
@@ -70,5 +70,5 @@ class XrasStormExpected(_Base):
         data = self.coordinator.data or {}
         return {
             "kp_forecast_max_24h": data.get("kp_forecast_max_24h"),
-            "level": data.get("forecast_level_key"),
+            "level_key": data.get("forecast_level_key"),
         }
