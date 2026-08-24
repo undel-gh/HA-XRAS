@@ -1,7 +1,9 @@
 {
   "domain": "xras_geomagnetic",
   "name": "XRAS — Геомагнитная обстановка",
-  "codeowners": [],
+  "codeowners": [
+    "@undel-gh", "@claude"
+  ],
   "config_flow": true,
   "documentation": "https://xras.ru/magnetic_storms.html",
   "integration_type": "service",
