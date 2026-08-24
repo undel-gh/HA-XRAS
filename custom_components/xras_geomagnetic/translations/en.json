@@ -29,5 +29,63 @@
     "error": {
       "cannot_connect": "Could not resolve the region or download the data."
     }
+  },
+  "entity": {
+    "sensor": {
+      "kp_current": {
+        "name": "Kp index"
+      },
+      "storm_level": {
+        "name": "Geomagnetic conditions",
+        "state": {
+          "quiet": "Quiet",
+          "active": "Unsettled",
+          "g1": "Minor storm (G1)",
+          "g2": "Moderate storm (G2)",
+          "g3": "Strong storm (G3)",
+          "g4": "Severe storm (G4)",
+          "g5": "Extreme storm (G5)"
+        }
+      },
+      "kp_max_today": {
+        "name": "Kp maximum today"
+      },
+      "kp_max_month": {
+        "name": "Kp maximum this month"
+      },
+      "storm_days_month": {
+        "name": "Storm days this month",
+        "unit_of_measurement": "days"
+      },
+      "kp_max_24h": {
+        "name": "Kp maximum over 24 h"
+      },
+      "kp_forecast_max_24h": {
+        "name": "Kp forecast for 24 h"
+      },
+      "kp_forecast_max_3d": {
+        "name": "Kp forecast for 3 days"
+      },
+      "ap": {
+        "name": "Ap index"
+      },
+      "f10": {
+        "name": "F10.7 flux"
+      },
+      "sn": {
+        "name": "Sunspot number"
+      },
+      "updated_at": {
+        "name": "Updated"
+      }
+    },
+    "binary_sensor": {
+      "storm": {
+        "name": "Magnetic storm"
+      },
+      "storm_forecast": {
+        "name": "Storm expected"
+      }
+    }
   }
 }
