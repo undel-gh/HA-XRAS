@@ -25,9 +25,13 @@ from .const import (
 )
 from .parser import XrasParseError, parse_json, parse_txt
 
-# Ссылки вида /txt/kp_RAL5.json или /txt/kpm_RAL5_202506.json
+# Ссылки вида /txt/kp_RAL5.json или /txt/kpm_RAL5_202506.json.
+# Префиксы перечислены явно: kpf?l?m?_ допускал несуществующие «kpfm_», «kpflm_».
+# Порядок от длинного к короткому — только ради читаемости: на корректность он
+# здесь не влияет, движок всё равно откатится в альтернацию, если после «kp»
+# не окажется подчёркивания.
 _CODE_IN_PAGE = re.compile(
-    r"/txt/kpf?l?m?_([A-Za-z0-9]{3,8}?)(?:_\d{6})?\.(?:json|txt)"
+    r"/txt/(?:kpfl|kpf|kpm|kp)_([A-Za-z0-9]{3,8}?)(?:_\d{6})?\.(?:json|txt)"
 )
 
 # Русские названия -> слаг страницы региона на сайте

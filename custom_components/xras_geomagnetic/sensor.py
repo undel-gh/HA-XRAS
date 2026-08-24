@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable
 
 from homeassistant.components.sensor import (
@@ -29,11 +30,32 @@ class XrasSensorDescription(SensorEntityDescription):
     attrs_fn: Callable[[dict], dict] | None = None
 
 
+def _half_up(value: float) -> int:
+    """Округление «половина вверх»: 2.5 -> 3.
+
+    Встроенный round() округляет к чётному (round(2.5) == 2), что расходится
+    с тем, как значения показывает сайт.
+    """
+    return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _kp_notation(kp: float) -> str:
+    """Kp в записи третями, как на сайте: 1.67 -> «2-», 7.33 -> «7+», 8.0 -> «8»."""
+    thirds = _half_up(kp * 3)
+    whole, remainder = divmod(thirds, 3)
+    if remainder == 0:
+        return str(whole)
+    if remainder == 1:
+        return f"{whole}+"
+    return f"{whole + 1}-"
+
+
 def _kp_attrs(data: dict) -> dict:
-    """Ряды для графиков и «сайтовое» округлённое значение."""
+    """Ряды для графиков и «сайтовые» представления значения."""
     kp = data.get("kp_current")
     return {
-        "kp_display": round(kp) if kp is not None else None,
+        "kp_display": _half_up(kp) if kp is not None else None,
+        "kp_notation": _kp_notation(kp) if kp is not None else None,
         "measured_at": data["kp_current_ts"].isoformat()
         if data.get("kp_current_ts")
         else None,
@@ -65,8 +87,10 @@ def _daily_attrs(data: dict) -> dict:
 
 def _month_attrs(data: dict) -> dict:
     """Помесячная история: Kp, Ap, F10.7 и число пятен по суткам."""
+    peak = data.get("kp_max_month")
     return {
         "storm_days": data.get("storm_days_month"),
+        "kp_notation": _kp_notation(peak) if peak is not None else None,
         "history": [
             {
                 "date": row["date"].isoformat(),
