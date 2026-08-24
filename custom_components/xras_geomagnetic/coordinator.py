@@ -92,7 +92,8 @@ class XrasCoordinator(DataUpdateCoordinator):
                 sets[key] = result
 
         fact = sets["fact"]
-        assert fact is not None
+        if fact is None:  # не должен случиться: набор обязательный
+            raise UpdateFailed("нет данных факта")
         self.tz = fact.tz
 
         now = datetime.now(timezone.utc)
