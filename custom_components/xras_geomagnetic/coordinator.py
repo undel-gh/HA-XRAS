@@ -36,7 +36,7 @@ class XrasCoordinator(DataUpdateCoordinator):
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         options = {**entry.data, **entry.options}
         self.entry = entry
-        self.code: str = str(options.get(CONF_CODE, DEFAULT_CODE)).strip()
+        self.code: str = str(options.get(CONF_CODE, DEFAULT_CODE)).strip().upper()
         self.tz = tz_from_string(self.code) or timezone.utc
         interval = int(options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
 
@@ -92,7 +92,9 @@ class XrasCoordinator(DataUpdateCoordinator):
                 sets[key] = result
 
         fact = sets["fact"]
-        assert fact is not None
+        if fact is None:
+            # Под python -O assert исчезает, поэтому проверяем явно
+            raise UpdateFailed("обязательный набор kp_* не получен")
         self.tz = fact.tz
 
         now = datetime.now(timezone.utc)
@@ -117,16 +119,21 @@ class XrasCoordinator(DataUpdateCoordinator):
 
         # Ap / F10.7 / SN — из суток факта, при отсутствии берём последние известные
         latest = today_fact or (fact.days[-1] if fact.days else None)
+        # days отсортированы по возрастанию, поэтому days[0] — это сегодня.
+        # Берём первые сутки строго после сегодняшних, иначе последние доступные.
         forecast_tomorrow = None
-        if forecast:
-            forecast_tomorrow = forecast.day_for(today + timedelta(days=1)) or (
-                forecast.days[0] if forecast.days else None
+        if forecast and forecast.days:
+            forecast_tomorrow = forecast.day_for(today + timedelta(days=1)) or next(
+                (day for day in forecast.days if day.date > today),
+                forecast.days[-1],
             )
 
-        level_key, level_name = level_for(current_kp)
+        level_key = level_for(current_kp)
         forecast_max_24h = max((point["kp"] for point in next_24h), default=None)
 
-        month_daily = month.daily if month else fact.daily
+        # Без месячного файла месячные показатели остаются пустыми:
+        # подставлять сюда трёхсуточные данные — значит молча врать о периоде.
+        month_daily = month.daily if month else []
         month_days = [row for row in month_daily if row["kp"] is not None]
 
         return {
@@ -146,8 +153,10 @@ class XrasCoordinator(DataUpdateCoordinator):
                 (point["kp"] for point in forecast_series), default=None
             ),
             "kp_max_month": max((row["kp"] for row in month_days), default=None),
-            "storm_days_month": sum(
-                1 for row in month_days if row["kp"] >= STORM_THRESHOLD
+            "storm_days_month": (
+                sum(1 for row in month_days if row["kp"] >= STORM_THRESHOLD)
+                if month is not None
+                else None
             ),
             "ap": latest.ap if latest else None,
             "f10": latest.f10 if latest else None,
@@ -155,8 +164,7 @@ class XrasCoordinator(DataUpdateCoordinator):
             "ap_forecast": forecast_tomorrow.ap if forecast_tomorrow else None,
             "f10_forecast": forecast_tomorrow.f10 if forecast_tomorrow else None,
             "level_key": level_key,
-            "level_name": level_name,
-            "forecast_level_name": level_for(forecast_max_24h)[1],
+            "forecast_level_key": level_for(forecast_max_24h),
             "series": fact_series,
             "forecast_series": forecast_series,
             "daily": month_daily,
@@ -169,7 +177,7 @@ class XrasCoordinator(DataUpdateCoordinator):
                     "f10": day.f10,
                     "sn": day.sn,
                 }
-                for day in (month.days if month else fact.days)
+                for day in (month.days if month else [])
                 if day.max_kp is not None
             ],
             "tzone": fact.tzone,
@@ -178,12 +186,12 @@ class XrasCoordinator(DataUpdateCoordinator):
         }
 
 
-def level_for(kp: float | None) -> tuple[str | None, str | None]:
-    """Kp -> (ключ уровня, название)."""
+def level_for(kp: float | None) -> str | None:
+    """Kp -> ключ уровня («quiet», «active», «g1»…). Название даёт перевод."""
     if kp is None:
-        return None, None
-    key, name = STORM_LEVELS[0][1], STORM_LEVELS[0][2]
-    for threshold, level_key, level_name in STORM_LEVELS:
+        return None
+    key = STORM_LEVELS[0][1]
+    for threshold, level_key in STORM_LEVELS:
         if kp >= threshold:
-            key, name = level_key, level_name
-    return key, name
+            key = level_key
+    return key

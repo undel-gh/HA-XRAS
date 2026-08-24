@@ -9,11 +9,10 @@ from homeassistant.components.binary_sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, STORM_THRESHOLD
 from .coordinator import XrasCoordinator
-from .sensor import build_device_info
+from .entity import XrasEntity
 
 
 async def async_setup_entry(
@@ -30,20 +29,13 @@ async def async_setup_entry(
     )
 
 
-class _Base(CoordinatorEntity[XrasCoordinator], BinarySensorEntity):
-    _attr_has_entity_name = True
+class _Base(XrasEntity, BinarySensorEntity):
     _attr_device_class = BinarySensorDeviceClass.SAFETY
-
-    def __init__(self, coordinator: XrasCoordinator, entry: ConfigEntry, key: str) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{key}"
-        self._attr_device_info = build_device_info(coordinator, entry)
 
 
 class XrasStormNow(_Base):
     """Kp >= 5 в текущем трёхчасовом интервале."""
 
-    _attr_name = "Магнитная буря"
     _attr_icon = "mdi:magnet-on"
 
     def __init__(self, coordinator: XrasCoordinator, entry: ConfigEntry) -> None:
@@ -57,13 +49,12 @@ class XrasStormNow(_Base):
     @property
     def extra_state_attributes(self) -> dict:
         data = self.coordinator.data or {}
-        return {"kp": data.get("kp_current"), "level": data.get("level_name")}
+        return {"kp": data.get("kp_current"), "level": data.get("level_key")}
 
 
 class XrasStormExpected(_Base):
     """Буря прогнозируется в ближайшие 24 часа."""
 
-    _attr_name = "Буря ожидается"
     _attr_icon = "mdi:calendar-alert"
 
     def __init__(self, coordinator: XrasCoordinator, entry: ConfigEntry) -> None:
@@ -79,5 +70,5 @@ class XrasStormExpected(_Base):
         data = self.coordinator.data or {}
         return {
             "kp_forecast_max_24h": data.get("kp_forecast_max_24h"),
-            "level": data.get("forecast_level_name"),
+            "level": data.get("forecast_level_key"),
         }

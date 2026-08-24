@@ -8,9 +8,13 @@ from typing import Any
 
 import aiohttp
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    OptionsFlow,
+)
 from homeassistant.core import callback
-from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -51,6 +55,10 @@ _ALIASES = {
 }
 
 
+class CannotConnect(Exception):
+    """Файл недоступен или не разобран."""
+
+
 def _schema(code: str, interval: int) -> vol.Schema:
     return vol.Schema(
         {
@@ -63,7 +71,12 @@ def _schema(code: str, interval: int) -> vol.Schema:
 
 
 async def _validate(hass, code: str) -> str:
-    """Проверить, что файл kp_<code> существует и разбирается."""
+    """Проверить, что файл kp_<code> существует и разбирается.
+
+    Код нормализуем в верхний регистр: на сайте они записаны как RAL5, RIK0,
+    UP03, а веб-сервер к регистру пути, вообще говоря, чувствителен.
+    """
+    code = code.upper()
     session = async_get_clientsession(hass)
     headers = {"User-Agent": USER_AGENT}
     timeout = aiohttp.ClientTimeout(total=30)
@@ -85,10 +98,6 @@ async def _validate(hass, code: str) -> str:
             last = err
 
     raise CannotConnect(str(last))
-
-
-class CannotConnect(Exception):
-    """Файл недоступен или не разобран."""
 
 
 def _slug(value: str) -> str:
@@ -130,13 +139,13 @@ async def _resolve(hass, value: str) -> tuple[str, str]:
     value = value.strip()
 
     try:
-        return value, await _validate(hass, value)
+        return value.upper(), await _validate(hass, value)
     except CannotConnect:
         pass
 
     code = await _code_from_region(hass, value)
     if code:
-        return code, await _validate(hass, code)
+        return code.upper(), await _validate(hass, code)
 
     raise CannotConnect(f"не удалось определить код по значению «{value}»")
 
@@ -146,7 +155,7 @@ class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
 
     VERSION = 2
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:
@@ -180,7 +189,7 @@ class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
 class XrasOptionsFlow(OptionsFlow):
     """Изменение настроек после установки."""
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         errors: dict[str, str] = {}
 
         if user_input is not None:

@@ -14,16 +14,15 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, STORM_LEVELS
 from .coordinator import XrasCoordinator
+from .entity import XrasEntity
 
 
 @dataclass(frozen=True, kw_only=True)
-class XrasSensorDescription(SensorEntityDescription):
+class XrasSensorDescription(SensorEntityDescription):  # noqa: D101
     """Описание сенсора с функциями значения и атрибутов."""
 
     value_fn: Callable[[dict], Any]
@@ -107,7 +106,6 @@ def _month_attrs(data: dict) -> dict:
 SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="kp_current",
-        name="Индекс Kp",
         icon="mdi:magnet",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
@@ -116,16 +114,14 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="storm_level",
-        name="Геомагнитная обстановка",
         icon="mdi:weather-lightning",
         device_class=SensorDeviceClass.ENUM,
-        options=[level[2] for level in STORM_LEVELS],
-        value_fn=lambda data: data.get("level_name"),
-        attrs_fn=lambda data: {"level_key": data.get("level_key")},
+        options=[key for _, key in STORM_LEVELS],
+        value_fn=lambda data: data.get("level_key"),
+        attrs_fn=None,
     ),
     XrasSensorDescription(
         key="kp_max_today",
-        name="Максимум Kp за сутки",
         icon="mdi:calendar-today",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
@@ -134,7 +130,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="kp_max_month",
-        name="Максимум Kp за месяц",
         icon="mdi:calendar-month",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
@@ -143,15 +138,12 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="storm_days_month",
-        name="Дней с бурей в этом месяце",
         icon="mdi:counter",
         state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="дн.",
         value_fn=lambda data: data.get("storm_days_month"),
     ),
     XrasSensorDescription(
         key="kp_max_24h",
-        name="Максимум Kp за 24 часа",
         icon="mdi:chart-line",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
@@ -159,16 +151,14 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="kp_forecast_max_24h",
-        name="Прогноз Kp на 24 часа",
         icon="mdi:chart-timeline-variant",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_forecast_max_24h"),
-        attrs_fn=lambda data: {"level": data.get("forecast_level_name")},
+        attrs_fn=lambda data: {"level": data.get("forecast_level_key")},
     ),
     XrasSensorDescription(
         key="kp_forecast_max_3d",
-        name="Прогноз Kp на трое суток",
         icon="mdi:chart-timeline-variant-shimmer",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
@@ -176,7 +166,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="ap",
-        name="Индекс Ap",
         icon="mdi:sine-wave",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
@@ -185,7 +174,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="f10",
-        name="Поток F10.7",
         icon="mdi:radio-tower",
         native_unit_of_measurement="s.f.u.",
         state_class=SensorStateClass.MEASUREMENT,
@@ -195,7 +183,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="sn",
-        name="Число солнечных пятен",
         icon="mdi:white-balance-sunny",
         state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=0,
@@ -204,7 +191,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     ),
     XrasSensorDescription(
         key="updated_at",
-        name="Обновлено",
         icon="mdi:clock-outline",
         device_class=SensorDeviceClass.TIMESTAMP,
         entity_registry_enabled_default=False,
@@ -224,20 +210,9 @@ async def async_setup_entry(
     )
 
 
-def build_device_info(coordinator: XrasCoordinator, entry: ConfigEntry) -> DeviceInfo:
-    return DeviceInfo(
-        identifiers={(DOMAIN, entry.entry_id)},
-        name=f"Геомагнитная обстановка ({coordinator.code})",
-        manufacturer="ИКИ РАН, Лаборатория солнечной астрономии",
-        model="xras.ru",
-        configuration_url="https://xras.ru/magnetic_storms.html",
-    )
-
-
-class XrasSensor(CoordinatorEntity[XrasCoordinator], SensorEntity):
+class XrasSensor(XrasEntity, SensorEntity):
     """Сенсор на основе данных XRAS."""
 
-    _attr_has_entity_name = True
     entity_description: XrasSensorDescription
 
     def __init__(
@@ -246,10 +221,8 @@ class XrasSensor(CoordinatorEntity[XrasCoordinator], SensorEntity):
         entry: ConfigEntry,
         description: XrasSensorDescription,
     ) -> None:
-        super().__init__(coordinator)
+        super().__init__(coordinator, entry, description.key)
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = build_device_info(coordinator, entry)
 
     @property
     def native_value(self) -> Any:
