@@ -62,11 +62,19 @@ TXT — обе схемы разбираются одинаково.
 | Сущность | Значение |
 | --- | --- |
 | `sensor.…_indeks_kp` | Текущий Kp — последний заполненный трёхчасовой интервал |
-| `sensor.…_geomagnitnaia_obstanovka` | Спокойная / Слабовозмущённая / Возбуждённая / бури G1–G5 |
+| `sensor.…_geomagnitnaia_obstanovka` | Спокойная / Возбуждённая / бури G1–G5 |
 | `sensor.…_maksimum_kp_za_sutki` | `max_kp` за сегодня |
 | `sensor.…_maksimum_kp_za_24_chasa` | Максимум факта за прошедшие сутки |
 | `sensor.…_maksimum_kp_za_mesiats` | Максимум за текущий месяц; в атрибутах — история по суткам |
 | `sensor.…_dnei_s_burei_v_etom_mesiatse` | Сколько суток месяца достигли Kp ≥ 5 |
+
+Названия сущностей и состояния берутся из `translations/`, поэтому в
+англоязычном интерфейсе Home Assistant они будут английскими. Состояние
+сенсора обстановки хранится ключом (`quiet`, `active`, `g1`…`g5`) — именно его
+надо писать в условиях автоматизаций, а не переведённый текст.
+
+Месячные сенсоры зависят от файла `kpm_*`: если он недоступен, они останутся
+пустыми (`unknown`), а не подставят значения за трое суток.
 | `sensor.…_prognoz_kp_na_24_chasa` | Максимум прогноза на ближайшие сутки |
 | `sensor.…_prognoz_kp_na_troe_sutok` | Максимум прогноза на трое суток |
 | `sensor.…_indeks_ap` | Ap (в атрибуте `forecast` — прогноз на завтра) |
@@ -174,7 +182,6 @@ automation:
         data:
           title: Ожидается магнитная буря
           message: >
-            {{ state_attr('binary_sensor.xras_buria_ozhidaetsia','level') }},
             прогноз Kp до
             {{ states('sensor.xras_prognoz_kp_na_24_chasa') }}
 ```
@@ -235,6 +242,11 @@ rest:
              | map(attribute='max_kp') | map('float')
              | select('ge', 5) | list | count }}
 ```
+
+## Перед публикацией в своём репозитории
+
+В `manifest.json` заполните `codeowners` и `issue_tracker` своими значениями —
+сейчас там заглушка, и hassfest на них поругается.
 
 ## Замечания
 
