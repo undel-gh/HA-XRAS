@@ -8,7 +8,7 @@
   "documentation": "https://xras.ru/magnetic_storms.html",
   "integration_type": "service",
   "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/undel-gh/HA-XRAS/issues",
   "requirements": [],
-  "version": "2.2.0",
-  "issue_tracker": "https://github.com/undel-gh/HA-XRAS/issues"
+  "version": "2.2.0"
 }
