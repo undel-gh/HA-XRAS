@@ -13,6 +13,7 @@ from custom_components.xras_geomagnetic.config_flow import (
     CannotConnect,
     RegionNotFound,
     _code_from_region,
+    _resolve,
     _validate,
 )
 from custom_components.xras_geomagnetic.const import (
@@ -138,3 +139,38 @@ async def test_validate_preserves_expected_failure_as_cause(
         await _validate(hass, "RAL5")
 
     assert exc_info.value.__cause__ is not None
+
+
+@pytest.mark.asyncio
+async def test_direct_code_source_failure_is_not_misreported_as_invalid_region(
+    hass,
+) -> None:
+    validate = AsyncMock(side_effect=CannotConnect("source unavailable"))
+    region_lookup = AsyncMock()
+
+    with patch(
+        "custom_components.xras_geomagnetic.config_flow._validate", validate
+    ), patch(
+        "custom_components.xras_geomagnetic.config_flow._code_from_region",
+        region_lookup,
+    ), pytest.raises(CannotConnect, match="source unavailable"):
+        await _resolve(hass, "RAL5")
+
+    region_lookup.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_non_code_region_skips_direct_api_probe(hass) -> None:
+    validate = AsyncMock(return_value="Moscow (UTC+03)")
+    region_lookup = AsyncMock(return_value="RAL5")
+
+    with patch(
+        "custom_components.xras_geomagnetic.config_flow._validate", validate
+    ), patch(
+        "custom_components.xras_geomagnetic.config_flow._code_from_region",
+        region_lookup,
+    ):
+        assert await _resolve(hass, "Москва") == ("RAL5", "Moscow (UTC+03)")
+
+    region_lookup.assert_awaited_once_with(hass, "Москва")
+    validate.assert_awaited_once_with(hass, "RAL5")
