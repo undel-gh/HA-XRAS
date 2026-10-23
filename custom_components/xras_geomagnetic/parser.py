@@ -1,14 +1,14 @@
 """Разбор выгрузок xras.ru (формат version 1.1).
 
-JSON:
-    {"version":"1.1","type":"kp","tzone":"UTC+03","source":"noaa","N":"3",
-     "data":[{"time":"2026-08-12","f10":"96","sn":"62","ap":"9","k":"2.67",
-              "max_kp":"2.67","h00":"1.33",...,"h21":"null"}, ...]}
+JSON сейчас содержит, например, ``tzone = "Moscow (UTC+03)"`` и массив
+``data`` в обратном хронологическом порядке. Парсер сортирует сутки по
+возрастанию даты и приводит JSON/TXT к единому объекту :class:`Dataset`.
 
-TXT: тот же набор полей, строки разделены символом «|», порядок колонок
-описан в шапке строкой вида «# [0] time, [1] f10, ...».
-
-Результат приводится к единому объекту Dataset.
+У регионов, чьё локальное смещение не кратно трём часам, XRAS добавляет
+``h00`` как точку непрерывности графика. Например, для UTC+07 реальные начала
+трёхчасовых интервалов — ``h01, h04, ... h22``; ``h00`` дублирует значение
+интервала, начавшегося накануне. ``Dataset.series`` отбрасывает такие
+служебные точки по фазе часового пояса.
 """
 
 from __future__ import annotations
@@ -18,17 +18,13 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
-# Запасной порядок колонок TXT — если шапка «# [0] time, ...» отсутствует.
-# Ключ — число колонок в строке: месячная выгрузка короче трёхсуточной.
+# Запасной порядок для коротких TXT без строки с описанием колонок.
 FALLBACK_COLUMNS: dict[int, list[str]] = {
     5: ["time", "f10", "sn", "ap", "max_kp"],
     6: ["time", "f10", "sn", "ap", "k", "max_kp"],
-    14: [
-        "time", "f10", "sn", "ap", "k", "max_kp",
-        "h00", "h03", "h06", "h09", "h12", "h15", "h18", "h21",
-    ],
 }
 
+_BASE_KP_COLUMNS = ["time", "f10", "sn", "ap", "k", "max_kp"]
 _SLOT_RE = re.compile(r"^h(\d{2})$")
 _COLUMN_RE = re.compile(r"\[(\d+)\]\s*([A-Za-z0-9_]+)")
 _TZONE_RE = re.compile(r"UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", re.IGNORECASE)
@@ -51,7 +47,7 @@ class Day:
     ap: float | None = None
     k: float | None = None
     max_kp: float | None = None
-    slots: dict[int, float] = field(default_factory=dict)  # час начала -> Kp
+    slots: dict[int, float] = field(default_factory=dict)  # локальный час -> Kp
 
 
 @dataclass
@@ -69,12 +65,21 @@ class Dataset:
     def series(self) -> list[dict]:
         """Трёхчасовой ряд Kp с привязкой ко времени."""
         points: list[dict] = []
+        valid_hours = _valid_slot_hours(self.tz)
+
         for day in self.days:
             for hour, kp in sorted(day.slots.items()):
+                if valid_hours is not None and hour not in valid_hours:
+                    continue
                 ts = datetime(
-                    day.date.year, day.date.month, day.date.day, hour, tzinfo=self.tz
+                    day.date.year,
+                    day.date.month,
+                    day.date.day,
+                    hour,
+                    tzinfo=self.tz,
                 )
                 points.append({"ts": ts, "kp": kp})
+
         points.sort(key=lambda point: point["ts"])
         return points
 
@@ -95,7 +100,7 @@ class Dataset:
 
 
 def tz_from_string(value: str | None) -> timezone | None:
-    """«UTC+03» или «UP03» -> объект timezone."""
+    """«Moscow (UTC+03)», «UTC+03» или «UP03» -> объект timezone."""
     if not value:
         return None
 
@@ -103,18 +108,48 @@ def tz_from_string(value: str | None) -> timezone | None:
     match = _TZONE_RE.search(text)
     if match:
         sign = 1 if match.group(1) == "+" else -1
-        return timezone(
-            sign * timedelta(hours=int(match.group(2)), minutes=int(match.group(3) or 0))
-        )
+        try:
+            return timezone(
+                sign
+                * timedelta(
+                    hours=int(match.group(2)),
+                    minutes=int(match.group(3) or 0),
+                )
+            )
+        except ValueError:
+            return None
 
     match = _CODE_RE.match(text)
     if match:
         sign = 1 if match.group(1).upper() == "P" else -1
-        return timezone(
-            sign * timedelta(hours=int(match.group(2)), minutes=int(match.group(3) or 0))
-        )
+        try:
+            return timezone(
+                sign
+                * timedelta(
+                    hours=int(match.group(2)),
+                    minutes=int(match.group(3) or 0),
+                )
+            )
+        except ValueError:
+            return None
 
     return None
+
+
+def _valid_slot_hours(tz: timezone) -> set[int] | None:
+    """Вернуть локальные часы начала 3-часовых UTC-интервалов.
+
+    XRAS именует слоты только по целому часу. Для смещений с минутами безопасно
+    не фильтровать: по текущему формату нельзя восстановить точную фазу.
+    """
+    offset = tz.utcoffset(None)
+    if offset is None:
+        return None
+    seconds = int(offset.total_seconds())
+    if seconds % 3600:
+        return None
+    phase = (seconds // 3600) % 3
+    return {hour for hour in range(24) if hour % 3 == phase}
 
 
 def _to_float(value: Any) -> float | None:
@@ -170,20 +205,66 @@ def _day_from_mapping(row: dict[str, Any]) -> Day | None:
         match = _SLOT_RE.match(key)
         if not match:
             continue
+        hour = int(match.group(1))
+        if hour > 23:
+            continue
         kp = _to_float(value)
         if kp is not None:
-            day.slots[int(match.group(1))] = kp
-
-    if day.max_kp is None and day.slots:
-        day.max_kp = max(day.slots.values())
+            day.slots[hour] = kp
 
     return day
 
 
+def _resolve_tz(dataset: Dataset, tz_hint: str | None) -> timezone:
+    tz = tz_from_string(dataset.tzone) or tz_from_string(tz_hint)
+    if tz is None:
+        raise XrasParseError(
+            f"не удалось определить часовую зону: {dataset.tzone or tz_hint!r}"
+        )
+    return tz
+
+
+def _fallback_columns(
+    width: int, dataset: Dataset, tz_hint: str | None
+) -> list[str] | None:
+    if width in FALLBACK_COLUMNS:
+        return FALLBACK_COLUMNS[width]
+
+    if width not in (14, 15):
+        return None
+
+    try:
+        tz = _resolve_tz(dataset, tz_hint)
+    except XrasParseError:
+        return None
+
+    valid_hours = _valid_slot_hours(tz)
+    if valid_hours is None:
+        return None
+
+    slots = [f"h{hour:02d}" for hour in sorted(valid_hours)]
+    if width == 15 and 0 not in valid_hours:
+        # Региональный TXT добавляет h00 как точку непрерывности графика.
+        slots.insert(0, "h00")
+
+    names = [*_BASE_KP_COLUMNS, *slots]
+    return names if len(names) == width else None
+
+
 def _finalise(dataset: Dataset, tz_hint: str | None) -> Dataset:
-    dataset.tz = (
-        tz_from_string(dataset.tzone) or tz_from_string(tz_hint) or timezone.utc
-    )
+    dataset.tz = _resolve_tz(dataset, tz_hint)
+    valid_hours = _valid_slot_hours(dataset.tz)
+    for day in dataset.days:
+        if day.max_kp is not None or not day.slots:
+            continue
+        values = [
+            kp
+            for hour, kp in day.slots.items()
+            if valid_hours is None or hour in valid_hours
+        ]
+        if values:
+            day.max_kp = max(values)
+
     dataset.days.sort(key=lambda day: day.date)
     if not dataset.days:
         raise XrasParseError("в файле нет ни одних суток")
@@ -265,11 +346,16 @@ def parse_txt(text: str, tz_hint: str | None = None) -> Dataset:
         raise XrasParseError("в TXT нет строк с данными")
 
     for parts in rows:
-        names = columns or FALLBACK_COLUMNS.get(len(parts))
+        names = columns or _fallback_columns(len(parts), dataset, tz_hint)
         if not names:
-            # Неизвестная ширина — берём самую длинную раскладку и что влезет
-            names = FALLBACK_COLUMNS[14]
-        row = {names[i]: parts[i] for i in range(min(len(names), len(parts)))}
+            raise XrasParseError(
+                f"неизвестное число колонок TXT без шапки: {len(parts)}"
+            )
+        if len(parts) != len(names):
+            raise XrasParseError(
+                f"число колонок TXT не совпадает с шапкой: {len(parts)} != {len(names)}"
+            )
+        row = dict(zip(names, parts))
         day = _day_from_mapping(row)
         if day:
             dataset.days.append(day)
