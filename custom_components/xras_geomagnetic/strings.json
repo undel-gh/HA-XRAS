@@ -2,89 +2,88 @@
   "config": {
     "step": {
       "user": {
-        "title": "XRAS — геомагнитная обстановка",
-        "description": "Данные Лаборатории солнечной астрономии ИКИ РАН (xras.ru).\n\nВведите название региона — «Москва», «Рига», «moscow» — код определится сам. Либо укажите код напрямую: RAL5 (Москва), RIK0 (Рига), UP03 (общая зона UTC+03).",
+        "title": "XRAS geomagnetic activity",
+        "description": "Data by the Solar Astronomy Laboratory, IKI RAS (xras.ru).\n\nEnter a region name such as 'moscow' or 'riga' and the code will be resolved automatically, or give the code directly: RAL5 (Moscow), RIK0 (Riga), UP03 (generic UTC+03 zone).",
         "data": {
-          "code": "Регион или код",
-          "scan_interval": "Интервал опроса, с"
+          "code": "Region or code",
+          "scan_interval": "Polling interval, s"
         }
       }
     },
     "error": {
-      "cannot_connect": "Не удалось определить регион или загрузить данные. Попробуйте ввести код напрямую (например RAL5) — его видно в ссылке «API: JSON» на странице своего региона."
+      "cannot_connect": "Could not download or parse XRAS data. Check the connection and try again.",
+      "invalid_region": "Region not found. Check the spelling, use the Latin slug from the XRAS page URL, or enter the API code directly."
     },
     "abort": {
-      "already_configured": "Этот регион уже настроен"
+      "already_configured": "This region is already configured"
     }
   },
   "options": {
     "step": {
       "init": {
+        "title": "Polling settings",
+        "description": "The region is fixed for this entry. To use another region, remove this entry and add a new one.",
         "data": {
-          "code": "Регион или код",
-          "scan_interval": "Интервал опроса, с"
+          "scan_interval": "Polling interval, s"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Не удалось определить регион или загрузить данные."
     }
   },
   "entity": {
     "sensor": {
       "kp_current": {
-        "name": "Индекс Kp"
+        "name": "Kp index"
       },
       "storm_level": {
-        "name": "Геомагнитная обстановка",
+        "name": "Geomagnetic conditions",
         "state": {
-          "quiet": "Спокойная",
-          "active": "Возбуждённая",
-          "g1": "Слабая буря (G1)",
-          "g2": "Средняя буря (G2)",
-          "g3": "Сильная буря (G3)",
-          "g4": "Очень сильная буря (G4)",
-          "g5": "Экстремальная буря (G5)"
+          "quiet": "Quiet",
+          "active": "Active",
+          "g1": "Minor storm (G1)",
+          "g2": "Moderate storm (G2)",
+          "g3": "Strong storm (G3)",
+          "g4": "Severe storm (G4)",
+          "g5": "Extreme storm (G5)"
         }
       },
       "kp_max_today": {
-        "name": "Максимум Kp за сутки"
+        "name": "Kp maximum today"
       },
       "kp_max_month": {
-        "name": "Максимум Kp за месяц"
+        "name": "Kp maximum this month"
       },
       "storm_days_month": {
-        "name": "Дней с бурей в этом месяце",
-        "unit_of_measurement": "дн."
+        "name": "Storm days this month",
+        "unit_of_measurement": "days"
       },
       "kp_max_24h": {
-        "name": "Максимум Kp за 24 часа"
+        "name": "Kp maximum over 24 h"
       },
       "kp_forecast_max_24h": {
-        "name": "Прогноз Kp на 24 часа"
+        "name": "Kp forecast for 24 h"
       },
       "kp_forecast_max_3d": {
-        "name": "Прогноз Kp на трое суток"
+        "name": "Kp forecast for 3 days"
       },
       "ap": {
-        "name": "Индекс Ap"
+        "name": "Ap index"
       },
       "f10": {
-        "name": "Поток F10.7"
+        "name": "F10.7 flux"
       },
       "sn": {
-        "name": "Число солнечных пятен"
+        "name": "Sunspot number"
       },
       "updated_at": {
-        "name": "Обновлено"
+        "name": "Updated"
       }
     },
     "binary_sensor": {
       "storm": {
-        "name": "Магнитная буря"
+        "name": "Magnetic storm"
       },
       "storm_forecast": {
-        "name": "Буря ожидается"
+        "name": "Storm expected"
       }
     }
   }

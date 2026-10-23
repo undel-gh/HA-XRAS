@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
-from homeassistant.components.binary_sensor import (
-    BinarySensorDeviceClass,
-    BinarySensorEntity,
-)
+from typing import Any
+
+from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, STORM_THRESHOLD
+from .const import STORM_THRESHOLD
 from .coordinator import XrasCoordinator
 from .entity import XrasEntity
 
@@ -20,7 +19,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: XrasCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: XrasCoordinator = entry.runtime_data
     async_add_entities(
         [
             XrasStormNow(coordinator, entry),
@@ -30,11 +29,11 @@ async def async_setup_entry(
 
 
 class _Base(XrasEntity, BinarySensorEntity):
-    _attr_device_class = BinarySensorDeviceClass.SAFETY
+    """Общая база бинарных сенсоров XRAS без safety-семантики HA."""
 
 
 class XrasStormNow(_Base):
-    """Kp >= 5 в текущем трёхчасовом интервале."""
+    """Kp >= 5 в текущем валидном трёхчасовом интервале."""
 
     _attr_icon = "mdi:magnet-on"
 
@@ -47,9 +46,16 @@ class XrasStormNow(_Base):
         return None if kp is None else kp >= STORM_THRESHOLD
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any] | None:
         data = self.coordinator.data or {}
-        return {"kp": data.get("kp_current"), "level_key": data.get("level_key")}
+        attrs: dict[str, Any] = {}
+        if (kp := data.get("kp_current")) is not None:
+            attrs["kp"] = kp
+        if (level := data.get("level_key")) is not None:
+            attrs["level_key"] = level
+        if (valid_until := data.get("kp_current_valid_until")) is not None:
+            attrs["valid_until"] = valid_until.isoformat()
+        return attrs or None
 
 
 class XrasStormExpected(_Base):
@@ -66,9 +72,11 @@ class XrasStormExpected(_Base):
         return None if kp is None else kp >= STORM_THRESHOLD
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any] | None:
         data = self.coordinator.data or {}
-        return {
-            "kp_forecast_max_24h": data.get("kp_forecast_max_24h"),
-            "level_key": data.get("forecast_level_key"),
-        }
+        attrs: dict[str, Any] = {}
+        if (kp := data.get("kp_forecast_max_24h")) is not None:
+            attrs["kp_forecast_max_24h"] = kp
+        if (level := data.get("forecast_level_key")) is not None:
+            attrs["level_key"] = level
+        return attrs or None

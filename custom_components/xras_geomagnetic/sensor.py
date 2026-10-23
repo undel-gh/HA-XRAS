@@ -16,7 +16,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, STORM_LEVELS
+from .const import STORM_LEVELS
 from .coordinator import XrasCoordinator
 from .entity import XrasEntity
 
@@ -30,16 +30,12 @@ class XrasSensorDescription(SensorEntityDescription):  # noqa: D101
 
 
 def _half_up(value: float) -> int:
-    """Округление «половина вверх»: 2.5 -> 3.
-
-    Встроенный round() округляет к чётному (round(2.5) == 2), что расходится
-    с тем, как значения показывает сайт.
-    """
+    """Округление «половина вверх»: 2.5 -> 3."""
     return int(Decimal(str(value)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 def _kp_notation(kp: float) -> str:
-    """Kp в записи третями, как на сайте: 1.67 -> «2-», 7.33 -> «7+», 8.0 -> «8»."""
+    """Kp в записи третями, как на сайте: 1.67 -> «2-», 7.33 -> «7+»."""
     thirds = _half_up(kp * 3)
     whole, remainder = divmod(thirds, 3)
     if remainder == 0:
@@ -57,6 +53,9 @@ def _kp_attrs(data: dict) -> dict:
         "kp_notation": _kp_notation(kp) if kp is not None else None,
         "measured_at": data["kp_current_ts"].isoformat()
         if data.get("kp_current_ts")
+        else None,
+        "valid_until": data["kp_current_valid_until"].isoformat()
+        if data.get("kp_current_valid_until")
         else None,
         "timezone": data.get("tzone"),
         "source": data.get("source"),
@@ -123,7 +122,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="kp_max_today",
         icon="mdi:calendar-today",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_max_today"),
         attrs_fn=_daily_attrs,
@@ -131,7 +129,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="kp_max_month",
         icon="mdi:calendar-month",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_max_month"),
         attrs_fn=_month_attrs,
@@ -139,20 +136,17 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="storm_days_month",
         icon="mdi:counter",
-        state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda data: data.get("storm_days_month"),
     ),
     XrasSensorDescription(
         key="kp_max_24h",
         icon="mdi:chart-line",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_max_24h"),
     ),
     XrasSensorDescription(
         key="kp_forecast_max_24h",
         icon="mdi:chart-timeline-variant",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_forecast_max_24h"),
         attrs_fn=lambda data: {"level_key": data.get("forecast_level_key")},
@@ -160,7 +154,6 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="kp_forecast_max_3d",
         icon="mdi:chart-timeline-variant-shimmer",
-        state_class=SensorStateClass.MEASUREMENT,
         suggested_display_precision=2,
         value_fn=lambda data: data.get("kp_forecast_max_3d"),
     ),
@@ -204,7 +197,7 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: XrasCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator: XrasCoordinator = entry.runtime_data
     async_add_entities(
         XrasSensor(coordinator, entry, description) for description in SENSORS
     )

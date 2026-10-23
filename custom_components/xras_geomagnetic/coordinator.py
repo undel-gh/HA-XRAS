@@ -21,6 +21,7 @@ from .const import (
     DEFAULT_CODE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    REQUEST_TIMEOUT,
     STORM_LEVELS,
     STORM_THRESHOLD,
     USER_AGENT,
@@ -28,17 +29,22 @@ from .const import (
 from .parser import Dataset, XrasParseError, parse_json, parse_txt, tz_from_string
 
 _LOGGER = logging.getLogger(__name__)
+_SLOT_DURATION = timedelta(hours=3)
 
 
 class XrasCoordinator(DataUpdateCoordinator):
     """Забирает четыре выгрузки и раскладывает их по нужным срезам."""
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        options = {**entry.data, **entry.options}
         self.entry = entry
-        self.code: str = str(options.get(CONF_CODE, DEFAULT_CODE)).strip().upper()
+        self.code: str = str(entry.data.get(CONF_CODE, DEFAULT_CODE)).strip().upper()
         self.tz = tz_from_string(self.code) or timezone.utc
-        interval = int(options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+        interval = int(
+            entry.options.get(
+                CONF_SCAN_INTERVAL,
+                entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+            )
+        )
 
         super().__init__(
             hass,
@@ -53,13 +59,15 @@ class XrasCoordinator(DataUpdateCoordinator):
         """Сначала JSON, при неудаче — TXT."""
         session = async_get_clientsession(self.hass)
         headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/plain"}
-        timeout = aiohttp.ClientTimeout(total=30)
+        timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
         last_error: Exception | None = None
 
         for suffix in ("json", "txt"):
             url = f"{BASE_URL}/{prefix}_{self.code}.{suffix}"
             try:
-                async with session.get(url, headers=headers, timeout=timeout) as response:
+                async with session.get(
+                    url, headers=headers, timeout=timeout
+                ) as response:
                     response.raise_for_status()
                     raw = await response.text()
 
@@ -67,11 +75,18 @@ class XrasCoordinator(DataUpdateCoordinator):
                     return parse_json(json.loads(raw), self.code)
                 return parse_txt(raw, self.code)
 
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, XrasParseError) as err:
+            except (
+                aiohttp.ClientError,
+                TimeoutError,
+                json.JSONDecodeError,
+                XrasParseError,
+            ) as err:
                 last_error = err
-                _LOGGER.debug("%s: %s", url, err)
+                _LOGGER.debug("XRAS fetch failed for %s", url, exc_info=True)
 
-        raise UpdateFailed(f"{prefix}_{self.code}: {last_error}")
+        if last_error is None:
+            raise UpdateFailed(f"{prefix}_{self.code}: no response")
+        raise UpdateFailed(f"{prefix}_{self.code}: {last_error}") from last_error
 
     # --- основной цикл ----------------------------------------------------
 
@@ -83,9 +98,11 @@ class XrasCoordinator(DataUpdateCoordinator):
 
         sets: dict[str, Dataset | None] = {}
         for (key, (prefix, required)), result in zip(DATASETS.items(), results):
+            if isinstance(result, asyncio.CancelledError):
+                raise result
             if isinstance(result, Exception):
                 if required:
-                    raise UpdateFailed(str(result))
+                    raise UpdateFailed(str(result)) from result
                 _LOGGER.debug("Необязательный набор %s недоступен: %s", prefix, result)
                 sets[key] = None
             else:
@@ -93,7 +110,6 @@ class XrasCoordinator(DataUpdateCoordinator):
 
         fact = sets["fact"]
         if fact is None:
-            # Под python -O assert исчезает, поэтому проверяем явно
             raise UpdateFailed("обязательный набор kp_* не получен")
         self.tz = fact.tz
 
@@ -102,31 +118,45 @@ class XrasCoordinator(DataUpdateCoordinator):
 
         fact_series = fact.series
         past = [point for point in fact_series if point["ts"] <= now]
-        current = past[-1] if past else (fact_series[-1] if fact_series else None)
+        candidate = past[-1] if past else None
+        candidate_valid_until = (
+            candidate["ts"] + _SLOT_DURATION if candidate is not None else None
+        )
+        current = (
+            candidate
+            if candidate_valid_until is not None and now < candidate_valid_until
+            else None
+        )
         current_kp = current["kp"] if current else None
 
         forecast = sets["forecast"]
         forecast_series = [
-            point for point in (forecast.series if forecast else []) if point["ts"] > now
+            point
+            for point in (forecast.series if forecast else [])
+            if point["ts"] + _SLOT_DURATION > now
         ]
         next_24h = [
-            point for point in forecast_series if point["ts"] <= now + timedelta(hours=24)
+            point
+            for point in forecast_series
+            if point["ts"] < now + timedelta(hours=24)
         ]
 
         today_fact = fact.day_for(today)
         month = sets["month"]
         month_forecast = sets["month_forecast"]
 
-        # Ap / F10.7 / SN — из суток факта, при отсутствии берём последние известные
-        latest = today_fact or (fact.days[-1] if fact.days else None)
-        # days отсортированы по возрастанию, поэтому days[0] — это сегодня.
-        # Берём первые сутки строго после сегодняшних, иначе последние доступные.
-        forecast_tomorrow = None
-        if forecast and forecast.days:
-            forecast_tomorrow = forecast.day_for(today + timedelta(days=1)) or next(
-                (day for day in forecast.days if day.date > today),
-                forecast.days[-1],
-            )
+        # Ap / F10.7 / SN — из сегодняшних суток факта, а при отсутствии
+        # сегодняшней строки берём последние известные сутки не позднее today.
+        latest = today_fact or next(
+            (day for day in reversed(fact.days) if day.date <= today),
+            None,
+        )
+
+        # Прогнозные Ap/F10.7 относятся именно к завтрашним суткам. Если такой
+        # строки нет, не подменяем её более поздним или устаревшим днём.
+        forecast_tomorrow = (
+            forecast.day_for(today + timedelta(days=1)) if forecast else None
+        )
 
         level_key = level_for(current_kp)
         forecast_max_24h = max((point["kp"] for point in next_24h), default=None)
@@ -139,6 +169,7 @@ class XrasCoordinator(DataUpdateCoordinator):
         return {
             "kp_current": current_kp,
             "kp_current_ts": current["ts"] if current else None,
+            "kp_current_valid_until": candidate_valid_until if current else None,
             "kp_max_24h": max(
                 (
                     point["kp"]
@@ -180,6 +211,9 @@ class XrasCoordinator(DataUpdateCoordinator):
                 for day in (month.days if month else [])
                 if day.max_kp is not None
             ],
+            "dataset_available": {
+                key: dataset is not None for key, dataset in sets.items()
+            },
             "tzone": fact.tzone,
             "source": fact.source,
             "updated_at": now,

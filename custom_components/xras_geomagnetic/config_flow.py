@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -24,21 +25,22 @@ from .const import (
     DEFAULT_CODE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
+    REQUEST_TIMEOUT,
     USER_AGENT,
 )
 from .parser import XrasParseError, parse_json, parse_txt
 
-# Ссылки вида /txt/kp_RAL5.json или /txt/kpm_RAL5_202506.json.
-# Префиксы перечислены явно: kpf?l?m?_ допускал несуществующие «kpfm_», «kpflm_».
-# Порядок от длинного к короткому — только ради читаемости: на корректность он
-# здесь не влияет, движок всё равно откатится в альтернацию, если после «kp»
-# не окажется подчёркивания.
-_CODE_IN_PAGE = re.compile(
-    r"/txt/(?:kpfl|kpf|kpm|kp)_([A-Za-z0-9]{3,8}?)(?:_\d{6})?\.(?:json|txt)"
-)
+_LOGGER = logging.getLogger(__name__)
 
-# Русские названия -> слаг страницы региона на сайте
+# Ссылки вида /txt/kp_RAL5.json или /txt/kpm_RAL5_202506.json.
+_CODE_IN_PAGE = re.compile(
+    r"/txt/(?:kpfl|kpf|kpm|kp)_([A-Za-z0-9]{3,8})(?:_\d{6})?\.(?:json|txt)"
+)
+_DIRECT_CODE = re.compile(r"[A-Za-z0-9]{3,8}")
+
+# Русские названия -> слаг страницы региона на сайте.
 _ALIASES = {
     "москва": "moscow",
     "рига": "riga",
@@ -51,36 +53,54 @@ _ALIASES = {
     "ростов-на-дону": "rostov_on_don",
     "екатеринбург": "yekaterinburg",
     "красноярск": "krasnoyarsk",
+    "норильск": "norilsk",
     "ташкент": "tashkent",
 }
 
 
 class CannotConnect(Exception):
-    """Файл недоступен или не разобран."""
+    """Источник недоступен или данные не удалось разобрать."""
 
 
-def _schema(code: str, interval: int) -> vol.Schema:
+class RegionNotFound(Exception):
+    """Регион не найден по введённому названию или слагу."""
+
+
+class _CodeNotFound(Exception):
+    """Прямой код API отсутствует и значение можно попробовать как регион."""
+
+
+def _user_schema(code: str, interval: int) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_CODE, default=code): str,
             vol.Required(CONF_SCAN_INTERVAL, default=interval): vol.All(
-                vol.Coerce(int), vol.Range(min=MIN_SCAN_INTERVAL, max=86400)
+                vol.Coerce(int),
+                vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
             ),
         }
     )
 
 
-async def _validate(hass, code: str) -> str:
-    """Проверить, что файл kp_<code> существует и разбирается.
+def _options_schema(interval: int) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_SCAN_INTERVAL, default=interval): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
+            )
+        }
+    )
 
-    Код нормализуем в верхний регистр: на сайте они записаны как RAL5, RIK0,
-    UP03, а веб-сервер к регистру пути, вообще говоря, чувствителен.
-    """
-    code = code.upper()
+
+async def _validate(hass, code: str) -> str:
+    """Проверить, что файл kp_<code> существует и разбирается."""
+    code = code.strip().upper()
     session = async_get_clientsession(hass)
     headers = {"User-Agent": USER_AGENT}
-    timeout = aiohttp.ClientTimeout(total=30)
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     last: Exception | None = None
+    not_found = 0
 
     for suffix in ("json", "txt"):
         url = f"{BASE_URL}/kp_{code}.{suffix}"
@@ -94,10 +114,25 @@ async def _validate(hass, code: str) -> str:
                 else parse_txt(raw, code)
             )
             return dataset.tzone or code
-        except Exception as err:  # noqa: BLE001
+        except aiohttp.ClientResponseError as err:
             last = err
+            if err.status == 404:
+                not_found += 1
+            _LOGGER.debug("XRAS validation failed for %s", url, exc_info=True)
+        except (
+            aiohttp.ClientError,
+            TimeoutError,
+            json.JSONDecodeError,
+            XrasParseError,
+        ) as err:
+            last = err
+            _LOGGER.debug("XRAS validation failed for %s", url, exc_info=True)
 
-    raise CannotConnect(str(last))
+    if not_found == 2:
+        raise _CodeNotFound(code)
+    if last is None:
+        raise CannotConnect(f"не удалось проверить код {code}")
+    raise CannotConnect(f"не удалось проверить код {code}: {last}") from last
 
 
 def _slug(value: str) -> str:
@@ -105,14 +140,14 @@ def _slug(value: str) -> str:
     text = value.strip().lower()
     if text in _ALIASES:
         return _ALIASES[text]
-    return re.sub(r"[\s]+", "_", text)
+    return re.sub(r"\s+", "_", text)
 
 
-async def _code_from_region(hass, value: str) -> str | None:
+async def _code_from_region(hass, value: str) -> str:
     """Достать код из страницы региона по ссылке «API: JSON»."""
     slug = _slug(value)
     if not re.fullmatch(r"[a-z0-9_\-]+", slug):
-        return None
+        raise RegionNotFound(value)
 
     session = async_get_clientsession(hass)
     url = f"https://xras.ru/magnetic_storms.html/{slug}/"
@@ -120,63 +155,91 @@ async def _code_from_region(hass, value: str) -> str | None:
         async with session.get(
             url,
             headers={"User-Agent": USER_AGENT},
-            timeout=aiohttp.ClientTimeout(total=30),
+            timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+            allow_redirects=False,
         ) as response:
+            if 300 <= response.status < 400 or response.status == 404:
+                raise RegionNotFound(value)
             response.raise_for_status()
             page = await response.text()
-    except Exception:  # noqa: BLE001
-        return None
+    except RegionNotFound:
+        raise
+    except (aiohttp.ClientError, TimeoutError) as err:
+        _LOGGER.debug("XRAS region lookup failed for %s", url, exc_info=True)
+        raise CannotConnect(f"не удалось открыть страницу региона {value!r}") from err
 
-    found = _CODE_IN_PAGE.findall(page)
-    if not found:
-        return None
-    # Самый частый код на странице — он и есть код региона
-    return max(set(found), key=found.count)
+    codes = {code.upper() for code in _CODE_IN_PAGE.findall(page)}
+    if len(codes) != 1:
+        _LOGGER.debug(
+            "XRAS region page %s returned %d distinct API codes: %s",
+            url,
+            len(codes),
+            sorted(codes),
+        )
+        raise RegionNotFound(value)
+    return codes.pop()
 
 
 async def _resolve(hass, value: str) -> tuple[str, str]:
     """Вернуть (код, часовая зона). Принимает и код, и название региона."""
     value = value.strip()
 
-    try:
-        return value.upper(), await _validate(hass, value)
-    except CannotConnect:
-        pass
+    # Кириллица, пробелы и URL-слаги не являются кодами XRAS, поэтому не делаем
+    # перед поиском региона два заведомо лишних запроса к kp_<value>.*.
+    if _DIRECT_CODE.fullmatch(value):
+        code = value.upper()
+        try:
+            return code, await _validate(hass, code)
+        except _CodeNotFound:
+            # ASCII-имя вроде "moscow" выглядит как код, но может быть slug.
+            pass
 
     code = await _code_from_region(hass, value)
-    if code:
-        return code.upper(), await _validate(hass, code)
-
-    raise CannotConnect(f"не удалось определить код по значению «{value}»")
+    try:
+        return code, await _validate(hass, code)
+    except _CodeNotFound as err:
+        # Страница региона сослалась на отсутствующий API-код: это уже сбой
+        # источника, а не пользовательская ошибка написания региона.
+        raise CannotConnect(
+            f"регион {value!r} ссылается на недоступный код {code}"
+        ) from err
 
 
 class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
     """Первичная настройка."""
 
-    VERSION = 2
+    VERSION = 3
 
-    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+    async def async_step_user(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         errors: dict[str, str] = {}
+        code_value = DEFAULT_CODE
+        interval_value = DEFAULT_SCAN_INTERVAL
 
         if user_input is not None:
+            code_value = str(user_input[CONF_CODE])
+            interval_value = int(user_input[CONF_SCAN_INTERVAL])
             try:
-                code, tzone = await _resolve(self.hass, str(user_input[CONF_CODE]))
+                code, _tzone = await _resolve(self.hass, code_value)
+            except RegionNotFound:
+                errors["base"] = "invalid_region"
             except CannotConnect:
                 errors["base"] = "cannot_connect"
             else:
-                await self.async_set_unique_id(code.upper())
+                await self.async_set_unique_id(code)
                 self._abort_if_unique_id_configured()
                 return self.async_create_entry(
-                    title=f"Геомагнитная обстановка — {code} ({tzone})",
+                    title=f"XRAS — {code}",
                     data={
                         CONF_CODE: code,
-                        CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL],
+                        CONF_SCAN_INTERVAL: interval_value,
                     },
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=_schema(DEFAULT_CODE, DEFAULT_SCAN_INTERVAL),
+            data_schema=_user_schema(code_value, interval_value),
             errors=errors,
         )
 
@@ -189,25 +252,23 @@ class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
 class XrasOptionsFlow(OptionsFlow):
     """Изменение настроек после установки."""
 
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        errors: dict[str, str] = {}
-
+    async def async_step_init(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
         if user_input is not None:
-            try:
-                code, _ = await _resolve(self.hass, str(user_input[CONF_CODE]))
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            else:
-                return self.async_create_entry(
-                    data={**user_input, CONF_CODE: code}
-                )
+            return self.async_create_entry(
+                data={CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL])}
+            )
 
-        current = {**self.config_entry.data, **self.config_entry.options}
+        interval = int(
+            self.config_entry.options.get(
+                CONF_SCAN_INTERVAL,
+                self.config_entry.data.get(
+                    CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
+                ),
+            )
+        )
         return self.async_show_form(
             step_id="init",
-            data_schema=_schema(
-                current.get(CONF_CODE, DEFAULT_CODE),
-                current.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
-            ),
-            errors=errors,
+            data_schema=_options_schema(interval),
         )

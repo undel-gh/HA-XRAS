@@ -11,7 +11,8 @@
       }
     },
     "error": {
-      "cannot_connect": "Could not resolve the region or download the data. Try entering the code directly, e.g. RAL5."
+      "cannot_connect": "Could not download or parse XRAS data. Check the connection and try again.",
+      "invalid_region": "Region not found. Check the spelling, use the Latin slug from the XRAS page URL, or enter the API code directly."
     },
     "abort": {
       "already_configured": "This region is already configured"
@@ -20,14 +21,12 @@
   "options": {
     "step": {
       "init": {
+        "title": "Polling settings",
+        "description": "The region is fixed for this entry. To use another region, remove this entry and add a new one.",
         "data": {
-          "code": "Region or code",
           "scan_interval": "Polling interval, s"
         }
       }
-    },
-    "error": {
-      "cannot_connect": "Could not resolve the region or download the data."
     }
   },
   "entity": {
@@ -39,7 +38,7 @@
         "name": "Geomagnetic conditions",
         "state": {
           "quiet": "Quiet",
-          "active": "Unsettled",
+          "active": "Active",
           "g1": "Minor storm (G1)",
           "g2": "Moderate storm (G2)",
           "g3": "Strong storm (G3)",
