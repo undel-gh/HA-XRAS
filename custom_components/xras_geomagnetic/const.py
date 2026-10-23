@@ -20,10 +20,10 @@ CONF_SCAN_INTERVAL = "scan_interval"
 DEFAULT_CODE = "UP03"
 DEFAULT_SCAN_INTERVAL = 600
 MIN_SCAN_INTERVAL = 300
+MAX_SCAN_INTERVAL = 86400
+REQUEST_TIMEOUT = 30
 
-# ВАЖНО: держать в одном значении с "version" в manifest.json
-VERSION = "2.2.0"
-USER_AGENT = f"HomeAssistant-xras_geomagnetic/{VERSION} (+https://www.home-assistant.io)"
+USER_AGENT = "HomeAssistant-xras_geomagnetic (+https://github.com/undel-gh/HA-XRAS)"
 
 # Шкала как на xras.ru: до 4 — спокойная, 4…5 — возбуждённая, 5+ — бури G1–G5.
 # Названия здесь не храним: они живут в translations/*.json как состояния ENUM.
