@@ -1,0 +1,12 @@
+{
+  "version": "1.1",
+  "type": "kp",
+  "error": "",
+  "tzone": "Moscow (UTC+03)",
+  "source": "noaa",
+  "data": [
+    {"time": "2026-10-31", "f10": "null", "sn": "null", "ap": "null", "max_kp": "null"},
+    {"time": "2026-10-05", "f10": "100", "sn": "58", "ap": "24", "max_kp": "5.33"},
+    {"time": "2026-10-04", "f10": "92", "sn": "55", "ap": "36", "max_kp": "5.67"}
+  ]
+}
