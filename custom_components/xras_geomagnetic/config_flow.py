@@ -38,6 +38,7 @@ _LOGGER = logging.getLogger(__name__)
 _CODE_IN_PAGE = re.compile(
     r"/txt/(?:kpfl|kpf|kpm|kp)_([A-Za-z0-9]{3,8})(?:_\d{6})?\.(?:json|txt)"
 )
+_DIRECT_CODE = re.compile(r"[A-Za-z0-9]{3,8}")
 
 # Русские названия -> слаг страницы региона на сайте.
 _ALIASES = {
@@ -63,6 +64,10 @@ class CannotConnect(Exception):
 
 class RegionNotFound(Exception):
     """Регион не найден по введённому названию или слагу."""
+
+
+class _CodeNotFound(Exception):
+    """Прямой код API отсутствует и значение можно попробовать как регион."""
 
 
 def _user_schema(code: str, interval: int) -> vol.Schema:
@@ -95,6 +100,7 @@ async def _validate(hass, code: str) -> str:
     headers = {"User-Agent": USER_AGENT}
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
     last: Exception | None = None
+    not_found = 0
 
     for suffix in ("json", "txt"):
         url = f"{BASE_URL}/kp_{code}.{suffix}"
@@ -108,6 +114,11 @@ async def _validate(hass, code: str) -> str:
                 else parse_txt(raw, code)
             )
             return dataset.tzone or code
+        except aiohttp.ClientResponseError as err:
+            last = err
+            if err.status == 404:
+                not_found += 1
+            _LOGGER.debug("XRAS validation failed for %s", url, exc_info=True)
         except (
             aiohttp.ClientError,
             TimeoutError,
@@ -117,6 +128,8 @@ async def _validate(hass, code: str) -> str:
             last = err
             _LOGGER.debug("XRAS validation failed for %s", url, exc_info=True)
 
+    if not_found == 2:
+        raise _CodeNotFound(code)
     if last is None:
         raise CannotConnect(f"не удалось проверить код {code}")
     raise CannotConnect(f"не удалось проверить код {code}: {last}") from last
@@ -171,15 +184,25 @@ async def _resolve(hass, value: str) -> tuple[str, str]:
     """Вернуть (код, часовая зона). Принимает и код, и название региона."""
     value = value.strip()
 
-    try:
+    # Кириллица, пробелы и URL-слаги не являются кодами XRAS, поэтому не делаем
+    # перед поиском региона два заведомо лишних запроса к kp_<value>.*.
+    if _DIRECT_CODE.fullmatch(value):
         code = value.upper()
-        return code, await _validate(hass, code)
-    except CannotConnect:
-        # Значение могло быть названием/слагом региона, а не кодом API.
-        pass
+        try:
+            return code, await _validate(hass, code)
+        except _CodeNotFound:
+            # ASCII-имя вроде "moscow" выглядит как код, но может быть slug.
+            pass
 
     code = await _code_from_region(hass, value)
-    return code, await _validate(hass, code)
+    try:
+        return code, await _validate(hass, code)
+    except _CodeNotFound as err:
+        # Страница региона сослалась на отсутствующий API-код: это уже сбой
+        # источника, а не пользовательская ошибка написания региона.
+        raise CannotConnect(
+            f"регион {value!r} ссылается на недоступный код {code}"
+        ) from err
 
 
 class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
