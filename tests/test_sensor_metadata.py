@@ -21,6 +21,8 @@ def test_forecasts_and_aggregates_do_not_claim_measurement_state_class() -> None
         assert descriptions[key].state_class is None
 
 
-def test_geomagnetic_binary_sensors_have_no_safety_device_class() -> None:
-    assert getattr(_Base, "_attr_device_class", None) is None
+def test_geomagnetic_binary_sensors_have_no_explicit_device_class() -> None:
+    # BinarySensorEntity exposes an inherited _attr_device_class property; the
+    # integration must not override it with SAFETY or any other device class.
+    assert _Base.__dict__.get("_attr_device_class") is None
     assert issubclass(_Base, Entity)
