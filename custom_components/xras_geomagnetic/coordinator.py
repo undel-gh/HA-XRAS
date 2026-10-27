@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from functools import partial
 
 import aiohttp
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.event import async_track_point_in_utc_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -39,6 +42,7 @@ class XrasCoordinator(DataUpdateCoordinator):
         self.entry = entry
         self.code: str = str(entry.data.get(CONF_CODE, DEFAULT_CODE)).strip().upper()
         self.tz = tz_from_string(self.code) or timezone.utc
+        self._unsub_current_expiry: Callable[[], None] | None = None
         interval = int(
             entry.options.get(
                 CONF_SCAN_INTERVAL,
@@ -49,9 +53,89 @@ class XrasCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=entry,
             name=f"{DOMAIN} ({self.code})",
             update_interval=timedelta(seconds=interval),
         )
+
+    # --- срок действия текущего Kp ---------------------------------------
+
+    @callback
+    def _async_refresh_finished(self) -> None:
+        """После любого refresh синхронизировать локальный таймер истечения."""
+        super()._async_refresh_finished()
+        self._schedule_current_expiry()
+
+    @callback
+    def _schedule_current_expiry(self) -> None:
+        """Запланировать сброс текущего Kp ровно в конце его трёхчасового слота."""
+        self._cancel_current_expiry()
+        data = self.data or {}
+        measured_at = data.get("kp_current_ts")
+        valid_until = data.get("kp_current_valid_until")
+        if measured_at is None or valid_until is None:
+            return
+
+        self._unsub_current_expiry = async_track_point_in_utc_time(
+            self.hass,
+            partial(self._expire_current, measured_at, valid_until),
+            valid_until.astimezone(timezone.utc),
+        )
+
+    @callback
+    def _cancel_current_expiry(self) -> None:
+        """Отменить ранее запланированное истечение текущего Kp."""
+        if self._unsub_current_expiry is not None:
+            self._unsub_current_expiry()
+            self._unsub_current_expiry = None
+
+    @callback
+    def _expire_current(
+        self,
+        expected_measured_at: datetime,
+        expected_valid_until: datetime,
+        now: datetime,
+    ) -> None:
+        """Сбросить только тот Kp, для которого был поставлен этот таймер."""
+        self._unsub_current_expiry = None
+        data = self.data
+        if not data:
+            return
+
+        # Refresh мог успеть принести следующий слот одновременно с таймером.
+        # Старый callback не должен очищать более новое значение.
+        if (
+            data.get("kp_current_ts") != expected_measured_at
+            or data.get("kp_current_valid_until") != expected_valid_until
+        ):
+            return
+
+        if now < expected_valid_until:
+            self._schedule_current_expiry()
+            return
+
+        self.data = {
+            **data,
+            "kp_current": None,
+            "kp_current_ts": None,
+            "kp_current_valid_until": None,
+            "level_key": None,
+        }
+
+        # async_set_updated_data() здесь нельзя использовать: он сбросил бы
+        # расписание сетевого polling. Нам нужно только немедленно уведомить
+        # сущности об истечении уже полученного значения.
+        self.async_update_listeners()
+        _LOGGER.debug(
+            "Current Kp for %s expired at %s",
+            self.code,
+            expected_valid_until.isoformat(),
+        )
+
+    async def async_shutdown(self) -> None:
+        """Отменить локальный таймер вместе со штатными задачами coordinator."""
+        self._cancel_current_expiry()
+        await super().async_shutdown()
 
     # --- сеть -------------------------------------------------------------
 
