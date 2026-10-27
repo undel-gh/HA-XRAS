@@ -13,7 +13,7 @@ import aiohttp
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.helpers.event import async_track_point_in_utc_time
+from homeassistant.helpers.event import async_call_later, async_track_point_in_utc_time
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -24,6 +24,7 @@ from .const import (
     DEFAULT_CODE,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MIN_SCAN_INTERVAL,
     REQUEST_TIMEOUT,
     STORM_LEVELS,
     STORM_THRESHOLD,
@@ -33,6 +34,8 @@ from .parser import Dataset, XrasParseError, parse_json, parse_txt, tz_from_stri
 
 _LOGGER = logging.getLogger(__name__)
 _SLOT_DURATION = timedelta(hours=3)
+_CURRENT_REFRESH_RETRY_DELAY = timedelta(seconds=MIN_SCAN_INTERVAL)
+_CURRENT_REFRESH_RETRY_LIMIT = 3
 
 
 class XrasCoordinator(DataUpdateCoordinator):
@@ -43,6 +46,8 @@ class XrasCoordinator(DataUpdateCoordinator):
         self.code: str = str(entry.data.get(CONF_CODE, DEFAULT_CODE)).strip().upper()
         self.tz = tz_from_string(self.code) or timezone.utc
         self._unsub_current_expiry: Callable[[], None] | None = None
+        self._unsub_current_refresh_retry: Callable[[], None] | None = None
+        self._current_refresh_retries_remaining = 0
         interval = int(
             entry.options.get(
                 CONF_SCAN_INTERVAL,
@@ -62,15 +67,24 @@ class XrasCoordinator(DataUpdateCoordinator):
 
     @callback
     def _async_refresh_finished(self) -> None:
-        """После любого refresh синхронизировать локальный таймер истечения."""
+        """После любого refresh синхронизировать таймеры текущего Kp."""
         super()._async_refresh_finished()
         self._schedule_current_expiry()
+
+        data = self.data or {}
+        if data.get("kp_current") is not None:
+            self._stop_current_refresh_recovery()
+        elif self._current_refresh_retries_remaining > 0:
+            self._schedule_current_refresh_retry()
 
     @callback
     def _schedule_current_expiry(self) -> None:
         """Запланировать сброс текущего Kp ровно в конце его трёхчасового слота."""
         self._cancel_current_expiry()
         data = self.data or {}
+        if data.get("kp_current") is None:
+            return
+
         measured_at = data.get("kp_current_ts")
         valid_until = data.get("kp_current_valid_until")
         if measured_at is None or valid_until is None:
@@ -90,13 +104,60 @@ class XrasCoordinator(DataUpdateCoordinator):
             self._unsub_current_expiry = None
 
     @callback
-    def _expire_current(
+    def _cancel_current_refresh_retry(self) -> None:
+        """Отменить отложенную попытку получить новый Kp после границы слота."""
+        if self._unsub_current_refresh_retry is not None:
+            self._unsub_current_refresh_retry()
+            self._unsub_current_refresh_retry = None
+
+    @callback
+    def _stop_current_refresh_recovery(self) -> None:
+        """Завершить ускоренное получение Kp после успешного обновления."""
+        self._cancel_current_refresh_retry()
+        self._current_refresh_retries_remaining = 0
+
+    @callback
+    def _schedule_current_refresh_retry(self) -> None:
+        """Повторить refresh через 5 минут, если новый слот ещё не опубликован."""
+        if self._current_refresh_retries_remaining <= 0:
+            return
+        if self._unsub_current_refresh_retry is not None:
+            return
+
+        self._unsub_current_refresh_retry = async_call_later(
+            self.hass,
+            _CURRENT_REFRESH_RETRY_DELAY,
+            self._retry_current_refresh,
+        )
+
+    async def _retry_current_refresh(self, _now: datetime) -> None:
+        """Сделать одну ограниченную повторную попытку после истечения Kp."""
+        self._unsub_current_refresh_retry = None
+        if self._current_refresh_retries_remaining <= 0:
+            return
+        if (self.data or {}).get("kp_current") is not None:
+            self._stop_current_refresh_recovery()
+            return
+
+        self._current_refresh_retries_remaining -= 1
+        await self.async_refresh()
+
+        if (
+            self._current_refresh_retries_remaining == 0
+            and (self.data or {}).get("kp_current") is None
+        ):
+            _LOGGER.debug(
+                "Current Kp for %s is still unavailable after bounded expiry retries",
+                self.code,
+            )
+
+    async def _expire_current(
         self,
         expected_measured_at: datetime,
         expected_valid_until: datetime,
         now: datetime,
     ) -> None:
-        """Сбросить только тот Kp, для которого был поставлен этот таймер."""
+        """Сбросить истёкший Kp и сразу запросить новый слот у XRAS."""
         self._unsub_current_expiry = None
         data = self.data
         if not data:
@@ -117,24 +178,30 @@ class XrasCoordinator(DataUpdateCoordinator):
         self.data = {
             **data,
             "kp_current": None,
-            "kp_current_ts": None,
-            "kp_current_valid_until": None,
+            # Сохраняем границы последнего слота до ответа источника: это полезно
+            # для диагностики и не выдаёт старое значение за текущее.
+            "kp_current_ts": expected_measured_at,
+            "kp_current_valid_until": expected_valid_until,
             "level_key": None,
         }
-
-        # async_set_updated_data() здесь нельзя использовать: он сбросил бы
-        # расписание сетевого polling. Нам нужно только немедленно уведомить
-        # сущности об истечении уже полученного значения.
         self.async_update_listeners()
+
         _LOGGER.debug(
-            "Current Kp for %s expired at %s",
+            "Current Kp for %s expired at %s; requesting a fresh slot",
             self.code,
             expected_valid_until.isoformat(),
         )
 
+        # Один запрос делаем сразу. Если XRAS публикует новый слот с задержкой,
+        # _async_refresh_finished() поставит максимум три повтора по 5 минут.
+        self._cancel_current_refresh_retry()
+        self._current_refresh_retries_remaining = _CURRENT_REFRESH_RETRY_LIMIT
+        await self.async_refresh()
+
     async def async_shutdown(self) -> None:
-        """Отменить локальный таймер вместе со штатными задачами coordinator."""
+        """Отменить локальные таймеры вместе со штатными задачами coordinator."""
         self._cancel_current_expiry()
+        self._stop_current_refresh_recovery()
         await super().async_shutdown()
 
     # --- сеть -------------------------------------------------------------
