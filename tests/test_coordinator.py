@@ -185,3 +185,73 @@ async def test_stale_forecast_day_does_not_become_tomorrow(hass, monkeypatch) ->
     assert data["ap_forecast"] is None
     assert data["f10_forecast"] is None
     assert data["kp_forecast_max_24h"] is None
+
+
+def test_current_value_expires_without_network_refresh(hass, monkeypatch) -> None:
+    """A valid Kp must become unknown at valid_until even between HTTP polls."""
+    coordinator = XrasCoordinator(hass, _entry())
+    measured_at = NOW - timedelta(hours=2, minutes=30)
+    valid_until = measured_at + timedelta(hours=3)
+    coordinator.data = {
+        "kp_current": 5.33,
+        "kp_current_ts": measured_at,
+        "kp_current_valid_until": valid_until,
+        "level_key": "g1",
+        "updated_at": NOW,
+    }
+
+    scheduled: dict = {}
+
+    def fake_track_point(hass_arg, action, point):
+        assert hass_arg is hass
+        scheduled["action"] = action
+        scheduled["point"] = point
+        return lambda: scheduled.setdefault("cancelled", True)
+
+    def fail_if_polling_is_reset(*_args, **_kwargs):
+        raise AssertionError("local expiry must not reset the HTTP polling interval")
+
+    notifications: list[bool] = []
+    monkeypatch.setattr(
+        coordinator_module, "async_track_point_in_utc_time", fake_track_point
+    )
+    monkeypatch.setattr(
+        coordinator, "async_set_updated_data", fail_if_polling_is_reset
+    )
+    monkeypatch.setattr(
+        coordinator, "async_update_listeners", lambda: notifications.append(True)
+    )
+
+    coordinator._schedule_current_expiry()
+
+    assert scheduled["point"] == valid_until.astimezone(timezone.utc)
+    scheduled["action"](valid_until.astimezone(timezone.utc))
+
+    assert coordinator.data["kp_current"] is None
+    assert coordinator.data["kp_current_ts"] is None
+    assert coordinator.data["kp_current_valid_until"] is None
+    assert coordinator.data["level_key"] is None
+    assert coordinator.data["updated_at"] == NOW
+    assert notifications == [True]
+
+
+def test_stale_expiry_callback_does_not_clear_newer_slot(hass) -> None:
+    """An already queued callback must not wipe data from a newer refresh."""
+    coordinator = XrasCoordinator(hass, _entry())
+    old_measured_at = NOW - timedelta(hours=3)
+    old_valid_until = NOW
+    new_measured_at = NOW
+    new_valid_until = NOW + timedelta(hours=3)
+    coordinator.data = {
+        "kp_current": 1.33,
+        "kp_current_ts": new_measured_at,
+        "kp_current_valid_until": new_valid_until,
+        "level_key": "quiet",
+    }
+
+    coordinator._expire_current(old_measured_at, old_valid_until, NOW)
+
+    assert coordinator.data["kp_current"] == 1.33
+    assert coordinator.data["kp_current_ts"] == new_measured_at
+    assert coordinator.data["kp_current_valid_until"] == new_valid_until
+    assert coordinator.data["level_key"] == "quiet"
