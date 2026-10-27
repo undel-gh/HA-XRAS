@@ -13,6 +13,7 @@ from custom_components.xras_geomagnetic.const import (
     CONF_CODE,
     CONF_SCAN_INTERVAL,
     DOMAIN,
+    MIN_SCAN_INTERVAL,
 )
 from custom_components.xras_geomagnetic.coordinator import XrasCoordinator
 from custom_components.xras_geomagnetic.parser import Dataset, Day
@@ -187,8 +188,11 @@ async def test_stale_forecast_day_does_not_become_tomorrow(hass, monkeypatch) ->
     assert data["kp_forecast_max_24h"] is None
 
 
-def test_current_value_expires_without_network_refresh(hass, monkeypatch) -> None:
-    """A valid Kp must become unknown at valid_until even between HTTP polls."""
+@pytest.mark.asyncio
+async def test_current_value_expires_and_requests_immediate_refresh(
+    hass, monkeypatch
+) -> None:
+    """Expiry must invalidate current Kp and immediately request a fresh slot."""
     coordinator = XrasCoordinator(hass, _entry())
     measured_at = NOW - timedelta(hours=2, minutes=30)
     valid_until = measured_at + timedelta(hours=3)
@@ -209,9 +213,14 @@ def test_current_value_expires_without_network_refresh(hass, monkeypatch) -> Non
         return lambda: scheduled.setdefault("cancelled", True)
 
     def fail_if_polling_is_reset(*_args, **_kwargs):
-        raise AssertionError("local expiry must not reset the HTTP polling interval")
+        raise AssertionError("expiry state change must not use async_set_updated_data")
 
     notifications: list[bool] = []
+    refreshes: list[bool] = []
+
+    async def fake_refresh() -> None:
+        refreshes.append(True)
+
     monkeypatch.setattr(
         coordinator_module, "async_track_point_in_utc_time", fake_track_point
     )
@@ -221,21 +230,99 @@ def test_current_value_expires_without_network_refresh(hass, monkeypatch) -> Non
     monkeypatch.setattr(
         coordinator, "async_update_listeners", lambda: notifications.append(True)
     )
+    monkeypatch.setattr(coordinator, "async_refresh", fake_refresh)
 
     coordinator._schedule_current_expiry()
 
     assert scheduled["point"] == valid_until.astimezone(timezone.utc)
-    scheduled["action"](valid_until.astimezone(timezone.utc))
+    await scheduled["action"](valid_until.astimezone(timezone.utc))
 
     assert coordinator.data["kp_current"] is None
-    assert coordinator.data["kp_current_ts"] is None
-    assert coordinator.data["kp_current_valid_until"] is None
+    assert coordinator.data["kp_current_ts"] == measured_at
+    assert coordinator.data["kp_current_valid_until"] == valid_until
     assert coordinator.data["level_key"] is None
     assert coordinator.data["updated_at"] == NOW
     assert notifications == [True]
+    assert refreshes == [True]
+    assert coordinator._current_refresh_retries_remaining == 3
 
 
-def test_stale_expiry_callback_does_not_clear_newer_slot(hass) -> None:
+@pytest.mark.asyncio
+async def test_expiry_refresh_retries_are_bounded(hass, monkeypatch) -> None:
+    """A delayed XRAS slot gets at most three 5-minute recovery retries."""
+    coordinator = XrasCoordinator(hass, _entry())
+    coordinator.data = {
+        "kp_current": None,
+        "kp_current_ts": None,
+        "kp_current_valid_until": None,
+        "level_key": None,
+    }
+    coordinator._current_refresh_retries_remaining = 3
+
+    scheduled: list[dict] = []
+
+    def fake_call_later(hass_arg, delay, action):
+        assert hass_arg is hass
+        item = {"delay": delay, "action": action, "cancelled": False}
+        scheduled.append(item)
+
+        def cancel() -> None:
+            item["cancelled"] = True
+
+        return cancel
+
+    refreshes: list[bool] = []
+
+    async def fake_refresh() -> None:
+        refreshes.append(True)
+        coordinator._async_refresh_finished()
+
+    monkeypatch.setattr(coordinator_module, "async_call_later", fake_call_later)
+    monkeypatch.setattr(coordinator, "async_refresh", fake_refresh)
+
+    coordinator._async_refresh_finished()
+    assert scheduled[0]["delay"] == timedelta(seconds=MIN_SCAN_INTERVAL)
+
+    await scheduled[0]["action"](NOW)
+    assert coordinator._current_refresh_retries_remaining == 2
+    assert len(scheduled) == 2
+
+    await scheduled[1]["action"](NOW + timedelta(minutes=5))
+    assert coordinator._current_refresh_retries_remaining == 1
+    assert len(scheduled) == 3
+
+    await scheduled[2]["action"](NOW + timedelta(minutes=10))
+    assert coordinator._current_refresh_retries_remaining == 0
+    assert len(scheduled) == 3
+    assert refreshes == [True, True, True]
+
+
+def test_fresh_slot_stops_expiry_retries(hass, monkeypatch) -> None:
+    """A successful fresh slot cancels any pending expiry-recovery retry."""
+    coordinator = XrasCoordinator(hass, _entry())
+    measured_at = NOW
+    valid_until = NOW + timedelta(hours=3)
+    coordinator.data = {
+        "kp_current": 1.33,
+        "kp_current_ts": measured_at,
+        "kp_current_valid_until": valid_until,
+        "level_key": "quiet",
+    }
+    coordinator._current_refresh_retries_remaining = 2
+
+    cancelled: list[bool] = []
+    coordinator._unsub_current_refresh_retry = lambda: cancelled.append(True)
+    monkeypatch.setattr(coordinator, "_schedule_current_expiry", lambda: None)
+
+    coordinator._async_refresh_finished()
+
+    assert cancelled == [True]
+    assert coordinator._unsub_current_refresh_retry is None
+    assert coordinator._current_refresh_retries_remaining == 0
+
+
+@pytest.mark.asyncio
+async def test_stale_expiry_callback_does_not_clear_newer_slot(hass) -> None:
     """An already queued callback must not wipe data from a newer refresh."""
     coordinator = XrasCoordinator(hass, _entry())
     old_measured_at = NOW - timedelta(hours=3)
@@ -249,7 +336,7 @@ def test_stale_expiry_callback_does_not_clear_newer_slot(hass) -> None:
         "level_key": "quiet",
     }
 
-    coordinator._expire_current(old_measured_at, old_valid_until, NOW)
+    await coordinator._expire_current(old_measured_at, old_valid_until, NOW)
 
     assert coordinator.data["kp_current"] == 1.33
     assert coordinator.data["kp_current_ts"] == new_measured_at
