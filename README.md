@@ -73,21 +73,21 @@ TXT — обе схемы разбираются одинаково. Неизв�
 
 ## Сущности
 
-| Сущность | Значение |
+| Ключ | Значение |
 | --- | --- |
-| `sensor.…_indeks_kp` | Текущий Kp только для действующего трёхчасового интервала |
-| `sensor.…_geomagnitnaia_obstanovka` | Спокойная / Возбуждённая / бури G1–G5 |
-| `sensor.…_maksimum_kp_za_sutki` | `max_kp` за сегодня |
-| `sensor.…_maksimum_kp_za_24_chasa` | Максимум факта за прошедшие 24 часа |
-| `sensor.…_maksimum_kp_za_mesiats` | Максимум за текущий месяц; в атрибутах — история по суткам |
-| `sensor.…_dnei_s_burei_v_etom_mesiatse` | Сколько суток месяца достигли Kp ≥ 5 |
-| `sensor.…_prognoz_kp_na_24_chasa` | Максимум прогноза на ближайшие 24 часа |
-| `sensor.…_prognoz_kp_na_troe_sutok` | Максимум доступного трёхсуточного прогноза |
-| `sensor.…_indeks_ap` | Ap (в атрибуте `forecast` — прогноз строго на завтра) |
-| `sensor.…_potok_f10_7` | F10.7, s.f.u. (в атрибуте `forecast` — прогноз строго на завтра) |
-| `sensor.…_chislo_solnechnykh_piaten` | `sn`, по умолчанию выключен |
-| `binary_sensor.…_magnitnaia_buria` | `on` при Kp ≥ 5 в текущем валидном интервале |
-| `binary_sensor.…_buria_ozhidaetsia` | `on`, если Kp ≥ 5 прогнозируется в ближайшие 24 ч |
+| `kp_current` | Текущий Kp только для действующего трёхчасового интервала |
+| `storm_level` | Спокойная / Возбуждённая / бури G1–G5 |
+| `kp_max_today` | `max_kp` за сегодня |
+| `kp_max_24h` | Максимум факта за прошедшие 24 часа |
+| `kp_max_month` | Максимум за текущий месяц; в атрибутах — история по суткам |
+| `storm_days_month` | Сколько суток месяца достигли Kp ≥ 5 |
+| `kp_forecast_max_24h` | Максимум прогноза на ближайшие 24 часа |
+| `kp_forecast_max_3d` | Максимум доступного трёхсуточного прогноза |
+| `ap` | Ap (в атрибуте `forecast` — прогноз строго на завтра) |
+| `f10` | F10.7, s.f.u. (в атрибуте `forecast` — прогноз строго на завтра) |
+| `sn` | Число солнечных пятен; по умолчанию выключен |
+| `storm` | Бинарный сенсор: `on` при Kp ≥ 5 в текущем валидном интервале |
+| `storm_forecast` | Бинарный сенсор: `on`, если Kp ≥ 5 прогнозируется в ближайшие 24 ч |
 
 У текущего Kp есть атрибуты `measured_at` и `valid_until`. На границе слота
 интеграция не публикует искусственный промежуточный `unknown`: после небольшой
@@ -99,16 +99,29 @@ TXT — обе схемы разбираются одинаково. Неизв�
 `valid_until` сохраняют границы последнего фактического слота, чтобы было видно,
 почему значение уже не считается текущим.
 
-Entity ID создаёт Home Assistant из имени записи, перевода сущности и языка,
-который был активен при создании. Поэтому точный slug не является частью API
-интеграции и может отличаться между установками. Ниже используются реальные
-примерные ID для русскоязычной записи RAL5; перед копированием YAML замените их
-на ID из **Настройки → Устройства и службы → XRAS → Сущности**.
+Если Home Assistant запустился или обычный опрос попал в короткую «дыру» между
+слотами, интеграция запускает тот же bounded recovery, если последний
+`valid_until` истёк не более 15 минут назад. Более старые пропуски не создают
+дополнительных burst-запросов и ждут штатного интервала опроса.
+
+### Entity ID
+
+Точный `entity_id` не является частью API интеграции. Сущности используют
+`has_entity_name=True`: Home Assistant строит исходный object ID из имени
+устройства (`XRAS {code}`) и имени сущности. Для языков, которые HA не
+использует для native entity IDs (в том числе русского), для object ID берётся
+перевод на языке по умолчанию, поэтому русское отображаемое имя не означает
+кириллическую транслитерацию в `entity_id`. Уже созданные или вручную
+переименованные ID при этом сохраняются.
+
+Поэтому перед копированием YAML возьмите фактические ID из **Настройки →
+Устройства и службы → XRAS → Сущности**. В примерах ниже намеренно используются
+явные placeholder-ID вида `sensor.your_kp_entity` — замените их своими.
 
 ### Ключи уровней против переведённого текста
 
 Уровень обстановки везде хранится ключом: `quiet`, `active`, `g1`…`g5`. Это
-касается и состояния `sensor.…_geomagnitnaia_obstanovka`, и атрибутов
+касается и состояния ENUM-сенсора геомагнитной обстановки, и атрибутов
 `level_key` у бинарных сенсоров и у прогнозного Kp. В условиях автоматизаций
 сравнивайте именно с ключом — он не зависит от языка интерфейса и не поедет
 при смене формулировок.
@@ -119,8 +132,8 @@ Entity ID создаёт Home Assistant из имени записи, перев
 ENUM-сенсора — там оно уже локализовано:
 
 ```jinja
-{{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }}
-{{ state_attr('binary_sensor.geomagnitnaia_obstanovka_ral5_magnitnaia_buria', 'level_key') }}
+{{ states('sensor.your_storm_level_entity') }}
+{{ state_attr('binary_sensor.your_storm_now_entity', 'level_key') }}
 ```
 
 Названия сущностей и состояний берутся из `translations/`, поэтому в
@@ -151,7 +164,7 @@ ENUM-сенсора — там оно уже локализовано:
 * `kp_notation` — привычная запись третями, как в сводках на сайте:
   `1.67` → `2-`, `7.33` → `7+`, `8.00` → `8`.
 
-Атрибуты `sensor.…_indeks_kp` также содержат `series` (факт за 3 суток) и
+Атрибуты текущего Kp также содержат `series` (факт за 3 суток) и
 `forecast_series` (прогноз) — готовые ряды для графиков.
 
 ## Карточки
@@ -160,12 +173,12 @@ ENUM-сенсора — там оно уже локализовано:
 type: entities
 title: Геомагнитная обстановка
 entities:
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_prognoz_kp_na_24_chasa
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_ap
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_potok_f10_7
-  - entity: binary_sensor.geomagnitnaia_obstanovka_ral5_buria_ozhidaetsia
+  - entity: sensor.your_storm_level_entity
+  - entity: sensor.your_kp_entity
+  - entity: sensor.your_kp_forecast_24h_entity
+  - entity: sensor.your_ap_entity
+  - entity: sensor.your_f107_entity
+  - entity: binary_sensor.your_storm_forecast_entity
 ```
 
 График «факт + прогноз» ([ApexCharts Card](https://github.com/RomRider/apexcharts-card)):
@@ -180,14 +193,14 @@ span:
   start: day
   offset: "-3d"
 series:
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
+  - entity: sensor.your_kp_entity
     name: Факт
     type: column
     color: "#00e000"
     data_generator: |
       return entity.attributes.series
         .map(p => [new Date(p.time).getTime(), p.kp]);
-  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
+  - entity: sensor.your_kp_entity
     name: Прогноз
     type: column
     color: "#4a9eff"
@@ -205,11 +218,11 @@ yaxis:
 
 ```yaml
 type: custom:mushroom-template-card
-primary: "Kp {{ state_attr('sensor.geomagnitnaia_obstanovka_ral5_indeks_kp','kp_display') }}"
-secondary: "{{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }}"
+primary: "Kp {{ state_attr('sensor.your_kp_entity','kp_display') }}"
+secondary: "{{ states('sensor.your_storm_level_entity') }}"
 icon: mdi:magnet
 icon_color: >
-  {% set raw = states('sensor.geomagnitnaia_obstanovka_ral5_indeks_kp') %}
+  {% set raw = states('sensor.your_kp_entity') %}
   {% if not is_number(raw) %} disabled
   {% else %}
     {% set kp = raw | float %}
@@ -227,16 +240,16 @@ automation:
   - alias: Предупреждение о магнитной буре
     triggers:
       - trigger: state
-        entity_id: binary_sensor.geomagnitnaia_obstanovka_ral5_buria_ozhidaetsia
+        entity_id: binary_sensor.your_storm_forecast_entity
         to: "on"
     actions:
       - action: notify.mobile_app
         data:
           title: Ожидается магнитная буря
           message: >
-            {{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }},
+            {{ states('sensor.your_storm_level_entity') }},
             прогноз Kp до
-            {{ states('sensor.geomagnitnaia_obstanovka_ral5_prognoz_kp_na_24_chasa') }}
+            {{ states('sensor.your_kp_forecast_24h_entity') }}
 ```
 
 Для уведомления «буря закончилась» задавайте `to: "off"`, а не только
