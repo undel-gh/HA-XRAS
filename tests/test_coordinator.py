@@ -293,6 +293,98 @@ async def test_expiry_refresh_has_no_intermediate_unknown_state(hass, monkeypatc
     assert coordinator._current_refresh_recovery_slot is None
 
 
+def test_early_expiry_callback_crossing_boundary_starts_recovery(
+    hass, monkeypatch
+) -> None:
+    """An early callback must not lose recovery if wall time crosses valid_until."""
+    coordinator = XrasCoordinator(hass, _entry())
+    measured_at = NOW - timedelta(hours=3)
+    valid_until = NOW
+    coordinator.data = {
+        "kp_current": 5.33,
+        "kp_current_ts": measured_at,
+        "kp_current_valid_until": valid_until,
+        "level_key": "g1",
+    }
+
+    scheduled: dict = {}
+
+    def fake_call_later(hass_arg, delay, action):
+        assert hass_arg is hass
+        scheduled["delay"] = delay
+        scheduled["action"] = action
+        return lambda: None
+
+    monkeypatch.setattr(coordinator_module, "datetime", FrozenDateTime)
+    monkeypatch.setattr(coordinator_module, "async_call_later", fake_call_later)
+    monkeypatch.setattr(coordinator_module, "randint", lambda _a, _b: 5)
+
+    coordinator._expire_current(
+        measured_at,
+        valid_until,
+        valid_until - timedelta(microseconds=1),
+    )
+
+    assert coordinator._current_refresh_recovery_slot == (measured_at, valid_until)
+    assert coordinator._current_refresh_retries_remaining == 3
+    assert scheduled["delay"] == timedelta(seconds=5)
+
+
+def test_recent_startup_gap_starts_bounded_recovery(hass, monkeypatch) -> None:
+    """A recent stale candidate after startup should retry for the next slot."""
+    coordinator = XrasCoordinator(hass, _entry())
+    valid_until = NOW - timedelta(minutes=5)
+    measured_at = valid_until - timedelta(hours=3)
+    coordinator.data = {
+        "kp_current": None,
+        "kp_current_ts": measured_at,
+        "kp_current_valid_until": valid_until,
+        "level_key": None,
+    }
+
+    scheduled: dict = {}
+
+    def fake_call_later(hass_arg, delay, action):
+        assert hass_arg is hass
+        scheduled["delay"] = delay
+        scheduled["action"] = action
+        return lambda: None
+
+    monkeypatch.setattr(coordinator_module, "datetime", FrozenDateTime)
+    monkeypatch.setattr(coordinator_module, "async_call_later", fake_call_later)
+    monkeypatch.setattr(coordinator_module, "randint", lambda _a, _b: 11)
+
+    coordinator._schedule_current_expiry()
+
+    assert coordinator._current_refresh_recovery_slot == (measured_at, valid_until)
+    assert coordinator._current_refresh_retries_remaining == 3
+    assert scheduled["delay"] == timedelta(seconds=11)
+
+
+def test_old_startup_gap_does_not_restart_recovery(hass, monkeypatch) -> None:
+    """A long-stale candidate should wait for normal polling, not burst retries."""
+    coordinator = XrasCoordinator(hass, _entry())
+    valid_until = NOW - timedelta(minutes=16)
+    measured_at = valid_until - timedelta(hours=3)
+    coordinator.data = {
+        "kp_current": None,
+        "kp_current_ts": measured_at,
+        "kp_current_valid_until": valid_until,
+        "level_key": None,
+    }
+
+    def unexpected(*_args, **_kwargs):
+        raise AssertionError("old gaps must not schedule expiry-recovery requests")
+
+    monkeypatch.setattr(coordinator_module, "datetime", FrozenDateTime)
+    monkeypatch.setattr(coordinator_module, "async_call_later", unexpected)
+
+    coordinator._schedule_current_expiry()
+
+    assert coordinator._current_refresh_recovery_slot is None
+    assert coordinator._current_refresh_retries_remaining == 0
+
+
 @pytest.mark.asyncio
 async def test_expiry_refresh_retries_are_bounded_and_jittered(
     hass, monkeypatch
