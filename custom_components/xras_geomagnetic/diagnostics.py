@@ -26,7 +26,8 @@ async def async_get_config_entry_diagnostics(
         "last_update_success": coordinator.last_update_success,
         "last_exception": (
             str(coordinator.last_exception)
-            if coordinator.last_exception is not None
+            if not coordinator.last_update_success
+            and coordinator.last_exception is not None
             else None
         ),
         "timezone": data.get("tzone"),
