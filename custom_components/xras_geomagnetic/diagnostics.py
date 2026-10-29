@@ -24,6 +24,12 @@ async def async_get_config_entry_diagnostics(
         "code": coordinator.code,
         "polling_interval_seconds": int(coordinator.update_interval.total_seconds()),
         "last_update_success": coordinator.last_update_success,
+        "last_exception": (
+            str(coordinator.last_exception)
+            if not coordinator.last_update_success
+            and coordinator.last_exception is not None
+            else None
+        ),
         "timezone": data.get("tzone"),
         "source": data.get("source"),
         "dataset_available": data.get("dataset_available", {}),

@@ -89,10 +89,21 @@ TXT — обе схемы разбираются одинаково. Неизв�
 | `binary_sensor.…_magnitnaia_buria` | `on` при Kp ≥ 5 в текущем валидном интервале |
 | `binary_sensor.…_buria_ozhidaetsia` | `on`, если Kp ≥ 5 прогнозируется в ближайшие 24 ч |
 
-У текущего Kp есть атрибуты `measured_at` и `valid_until`. Если источник
-задержался и последний фактический интервал уже закончился, текущий Kp и
-бинарный сенсор бури становятся `unknown`, а не продолжают показывать
-устаревшее состояние.
+У текущего Kp есть атрибуты `measured_at` и `valid_until`. На границе слота
+интеграция не публикует искусственный промежуточный `unknown`: после небольшой
+случайной задержки 5–60 секунд выполняется запрос нового слота. Если XRAS уже
+обновился, состояние переходит сразу со старого Kp на новый; если свежего
+слота ещё нет — в `unknown`; при ошибке обязательного запроса сущности штатно
+становятся `unavailable`. Затем выполняется до трёх повторов не чаще чем раз в
+5 минут, также с небольшим jitter. При `unknown` атрибуты `measured_at` и
+`valid_until` сохраняют границы последнего фактического слота, чтобы было видно,
+почему значение уже не считается текущим.
+
+Entity ID создаёт Home Assistant из имени записи, перевода сущности и языка,
+который был активен при создании. Поэтому точный slug не является частью API
+интеграции и может отличаться между установками. Ниже используются реальные
+примерные ID для русскоязычной записи RAL5; перед копированием YAML замените их
+на ID из **Настройки → Устройства и службы → XRAS → Сущности**.
 
 ### Ключи уровней против переведённого текста
 
@@ -108,8 +119,8 @@ TXT — обе схемы разбираются одинаково. Неизв�
 ENUM-сенсора — там оно уже локализовано:
 
 ```jinja
-{{ states('sensor.xras_geomagnitnaia_obstanovka') }}   {# Слабая буря (G1) #}
-{{ state_attr('binary_sensor.xras_magnitnaia_buria', 'level_key') }}   {# g1 #}
+{{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }}
+{{ state_attr('binary_sensor.geomagnitnaia_obstanovka_ral5_magnitnaia_buria', 'level_key') }}
 ```
 
 Названия сущностей и состояний берутся из `translations/`, поэтому в
@@ -149,12 +160,12 @@ ENUM-сенсора — там оно уже локализовано:
 type: entities
 title: Геомагнитная обстановка
 entities:
-  - entity: sensor.xras_geomagnitnaia_obstanovka
-  - entity: sensor.xras_indeks_kp
-  - entity: sensor.xras_prognoz_kp_na_24_chasa
-  - entity: sensor.xras_indeks_ap
-  - entity: sensor.xras_potok_f10_7
-  - entity: binary_sensor.xras_buria_ozhidaetsia
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_prognoz_kp_na_24_chasa
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_ap
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_potok_f10_7
+  - entity: binary_sensor.geomagnitnaia_obstanovka_ral5_buria_ozhidaetsia
 ```
 
 График «факт + прогноз» ([ApexCharts Card](https://github.com/RomRider/apexcharts-card)):
@@ -169,14 +180,14 @@ span:
   start: day
   offset: "-3d"
 series:
-  - entity: sensor.xras_indeks_kp
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
     name: Факт
     type: column
     color: "#00e000"
     data_generator: |
       return entity.attributes.series
         .map(p => [new Date(p.time).getTime(), p.kp]);
-  - entity: sensor.xras_indeks_kp
+  - entity: sensor.geomagnitnaia_obstanovka_ral5_indeks_kp
     name: Прогноз
     type: column
     color: "#4a9eff"
@@ -194,15 +205,19 @@ yaxis:
 
 ```yaml
 type: custom:mushroom-template-card
-primary: "Kp {{ state_attr('sensor.xras_indeks_kp','kp_display') }}"
-secondary: "{{ states('sensor.xras_geomagnitnaia_obstanovka') }}"
+primary: "Kp {{ state_attr('sensor.geomagnitnaia_obstanovka_ral5_indeks_kp','kp_display') }}"
+secondary: "{{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }}"
 icon: mdi:magnet
 icon_color: >
-  {% set kp = states('sensor.xras_indeks_kp') | float(0) %}
-  {% if kp >= 7 %} red
-  {% elif kp >= 5 %} orange
-  {% elif kp >= 4 %} amber
-  {% else %} green {% endif %}
+  {% set raw = states('sensor.geomagnitnaia_obstanovka_ral5_indeks_kp') %}
+  {% if not is_number(raw) %} disabled
+  {% else %}
+    {% set kp = raw | float %}
+    {% if kp >= 7 %} red
+    {% elif kp >= 5 %} orange
+    {% elif kp >= 4 %} amber
+    {% else %} green {% endif %}
+  {% endif %}
 ```
 
 ## Автоматизация
@@ -212,24 +227,28 @@ automation:
   - alias: Предупреждение о магнитной буре
     triggers:
       - trigger: state
-        entity_id: binary_sensor.xras_buria_ozhidaetsia
+        entity_id: binary_sensor.geomagnitnaia_obstanovka_ral5_buria_ozhidaetsia
         to: "on"
     actions:
       - action: notify.mobile_app
         data:
           title: Ожидается магнитная буря
           message: >
-            {{ states('sensor.xras_geomagnitnaia_obstanovka') }},
+            {{ states('sensor.geomagnitnaia_obstanovka_ral5_geomagnitnaia_obstanovka') }},
             прогноз Kp до
-            {{ states('sensor.xras_prognoz_kp_na_24_chasa') }}
+            {{ states('sensor.geomagnitnaia_obstanovka_ral5_prognoz_kp_na_24_chasa') }}
 ```
+
+Для уведомления «буря закончилась» задавайте `to: "off"`, а не только
+`from: "on"`: тогда временная `unavailable` из-за сетевой ошибки не будет
+интерпретирована как окончание бури.
 
 ## Вариант без интеграции (только YAML)
 
 Если ставить компонент не хочется — штатный `rest`-сенсор. Данные в файле идут
-от новых суток к старым, поэтому сегодняшние — это `data[0]`. Пример ниже
-рассчитан на московский файл UTC+03; у регионов с другой фазой часового пояса
-набор полей `hXX` может отличаться.
+от новых суток к старым. Пример ниже рассчитан именно на московский файл
+UTC+03; у регионов с другой фазой часового пояса набор полей `hXX` и правила
+локального времени могут отличаться.
 
 ```yaml
 rest:
@@ -245,13 +264,19 @@ rest:
         unique_id: xras_kp_now
         state_class: measurement
         value_template: >
-          {% set d = value_json.data[0] %}
-          {% set slots = ['h21','h18','h15','h12','h09','h06','h03','h00'] %}
+          {% set now_ts = as_timestamp(now()) %}
           {% set ns = namespace(v=none) %}
-          {% for s in slots if ns.v is none and d[s] not in [none,'null'] %}
-            {% set ns.v = d[s] | float %}
+          {% for d in value_json.data if ns.v is none %}
+            {% for h in [21,18,15,12,9,6,3,0] if ns.v is none %}
+              {% set key = 'h%02d' | format(h) %}
+              {% set raw = d[key] %}
+              {% set start = as_timestamp(d.time ~ 'T' ~ ('%02d' | format(h)) ~ ':00:00+03:00') %}
+              {% if raw not in [none, 'null'] and start <= now_ts < start + 10800 %}
+                {% set ns.v = raw | float %}
+              {% endif %}
+            {% endfor %}
           {% endfor %}
-          {{ ns.v if ns.v is not none else value_json.data[1].h21 | float }}
+          {{ ns.v if ns.v is not none else 'unknown' }}
       - name: Ap
         unique_id: xras_ap
         value_template: "{{ value_json.data[0].ap | int }}"
@@ -281,10 +306,16 @@ rest:
              | select('ge', 5) | list | count }}
 ```
 
+В отличие от старого варианта «взять последний непустой hXX», этот шаблон
+проверяет, что выбранный московский слот действительно покрывает текущий
+момент. Он всё равно является упрощённым fallback и не заменяет парсер
+интеграции для регионов с другой фазой/DST.
+
 ## Разработка и тесты
 
-Тесты используют `pytest-homeassistant-custom-component` и запускаются тем же
-workflow, что Hassfest и HACS validation:
+Тесты используют закреплённые версии `pytest` и
+`pytest-homeassistant-custom-component` и запускаются тем же workflow, что
+Hassfest и HACS validation:
 
 ```bash
 python -m pip install -r requirements_test.txt
@@ -298,7 +329,8 @@ python -m pytest -q
 ## Замечания
 
 * Данные принадлежат ИКИ РАН — указывайте источник и не опрашивайте сайт чаще
-  раза в 5 минут (интеграция это ограничивает).
+  раза в 5 минут (интеграция это ограничивает; recovery после границы слота
+  добавляет jitter и остаётся ограниченным числом попыток).
 * Первоисточник Kp — NOAA (поле `source`), поэтому значения совпадают с
   NOAA SWPC.
 * Пустые значения приходят строкой `"null"`: в трёхсуточном файле так
