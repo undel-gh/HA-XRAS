@@ -134,6 +134,9 @@ class XrasCoordinator(DataUpdateCoordinator):
         now = datetime.now(timezone.utc)
         valid_until_utc = valid_until.astimezone(timezone.utc)
         if now >= valid_until_utc:
+            # A still-published Kp must never get stranded after its deadline.
+            # Also recover a startup/ordinary-refresh gap when the last slot only
+            # just expired and XRAS may be a few minutes late publishing the next.
             if (
                 data.get("kp_current") is not None
                 or now - valid_until_utc <= _CURRENT_REFRESH_RECENT_EXPIRY
@@ -240,6 +243,7 @@ class XrasCoordinator(DataUpdateCoordinator):
         if not data:
             return
 
+        # Refresh мог успеть принести следующий слот одновременно с таймером.
         if (
             data.get("kp_current_ts") != expected_measured_at
             or data.get("kp_current_valid_until") != expected_valid_until
@@ -247,9 +251,17 @@ class XrasCoordinator(DataUpdateCoordinator):
             return
 
         if now < expected_valid_until:
+            # Home Assistant normally calls on/after the target instant, but if a
+            # callback arrives early we resynchronize against the wall clock. If
+            # the wall clock crossed valid_until in the meantime, the scheduler
+            # starts recovery instead of silently dropping the timer.
             self._schedule_current_expiry()
             return
 
+        # Не публикуем искусственный промежуточный unknown: успешный refresh сам
+        # переведёт старое значение напрямую в новый Kp либо в unknown, если XRAS
+        # ещё не опубликовал следующий слот. При сетевой ошибке CoordinatorEntity
+        # штатно станет unavailable через last_update_success=False.
         self._start_current_refresh_recovery(
             expected_measured_at, expected_valid_until
         )
@@ -352,10 +364,14 @@ class XrasCoordinator(DataUpdateCoordinator):
         month = sets["month"]
         month_forecast = sets["month_forecast"]
 
+        # Суточные индексы XRAS могут появиться позже первых Kp-слотов нового дня.
+        # Поэтому откатываемся к последнему непустому значению отдельно по полям.
         ap = _latest_daily_value(fact.days, today, "ap")
         f10 = _latest_daily_value(fact.days, today, "f10")
         sn = _latest_daily_value(fact.days, today, "sn")
 
+        # Прогнозные Ap/F10.7 относятся именно к завтрашним суткам. Если такой
+        # строки нет, не подменяем её более поздним или устаревшим днём.
         forecast_tomorrow = (
             forecast.day_for(today + timedelta(days=1)) if forecast else None
         )
@@ -363,11 +379,15 @@ class XrasCoordinator(DataUpdateCoordinator):
         level_key = level_for(current_kp)
         forecast_max_24h = max((point["kp"] for point in next_24h), default=None)
 
+        # Без месячного файла месячные показатели остаются пустыми:
+        # подставлять сюда трёхсуточные данные — значит молча врать о периоде.
         month_daily = month.daily if month else []
         month_days = [row for row in month_daily if row["kp"] is not None]
 
         return {
             "kp_current": current_kp,
+            # Даже когда текущий слот уже протух, сохраняем границы последнего
+            # фактического candidate: это объясняет unknown в UI/диагностике.
             "kp_current_ts": candidate["ts"] if candidate else None,
             "kp_current_valid_until": candidate_valid_until,
             "kp_max_24h": max(
