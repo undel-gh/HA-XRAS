@@ -56,3 +56,20 @@ async def test_migration_rejects_duplicate_effective_region(hass) -> None:
     assert not await async_migrate_entry(hass, legacy)
     assert legacy.version == 2
     assert legacy.unique_id == "RAL5"
+
+
+@pytest.mark.asyncio
+async def test_migration_rejects_invalid_legacy_code(hass) -> None:
+    legacy = MockConfigEntry(
+        domain=DOMAIN,
+        title="XRAS legacy",
+        unique_id=None,
+        version=2,
+        data={CONF_CODE: "RAL5", CONF_SCAN_INTERVAL: 600},
+        options={CONF_CODE: "../../bad code"},
+    )
+    legacy.add_to_hass(hass)
+
+    assert not await async_migrate_entry(hass, legacy)
+    assert legacy.version == 2
+    assert legacy.data[CONF_CODE] == "RAL5"
