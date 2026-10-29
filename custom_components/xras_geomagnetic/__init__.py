@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
@@ -13,6 +14,7 @@ from .coordinator import XrasCoordinator
 
 _LOGGER = logging.getLogger(__name__)
 PLATFORMS: list[Platform] = [Platform.SENSOR, Platform.BINARY_SENSOR]
+_CODE_RE = re.compile(r"[A-Za-z0-9]{3,8}")
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -27,6 +29,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not effective_code:
         _LOGGER.error(
             "Cannot migrate XRAS entry %s without a region code", entry.entry_id
+        )
+        return False
+    if _CODE_RE.fullmatch(effective_code) is None:
+        _LOGGER.error(
+            "Cannot migrate XRAS entry %s with invalid region code %r",
+            entry.entry_id,
+            effective_code,
         )
         return False
 
