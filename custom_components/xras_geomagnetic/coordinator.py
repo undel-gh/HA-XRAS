@@ -39,6 +39,9 @@ _SLOT_DURATION = timedelta(hours=3)
 _CURRENT_REFRESH_RETRY_LIMIT = 3
 _CURRENT_REFRESH_JITTER_MIN = 5
 _CURRENT_REFRESH_JITTER_MAX = 60
+_CURRENT_REFRESH_RECENT_EXPIRY = timedelta(
+    seconds=MIN_SCAN_INTERVAL * _CURRENT_REFRESH_RETRY_LIMIT
+)
 
 
 def _latest_daily_value(days: list[Any], today: date, field: str) -> Any:
@@ -117,26 +120,34 @@ class XrasCoordinator(DataUpdateCoordinator):
 
     @callback
     def _schedule_current_expiry(self) -> None:
-        """Запланировать проверку Kp ровно в конце его трёхчасового слота."""
+        """Synchronize the current-slot expiry timer or recent-gap recovery."""
         self._cancel_current_expiry()
         if self._shutdown_requested or self._current_refresh_recovery_slot is not None:
             return
 
         data = self.data or {}
-        if data.get("kp_current") is None:
-            return
-
         measured_at = data.get("kp_current_ts")
         valid_until = data.get("kp_current_valid_until")
         if measured_at is None or valid_until is None:
             return
-        if datetime.now(timezone.utc) >= valid_until.astimezone(timezone.utc):
+
+        now = datetime.now(timezone.utc)
+        valid_until_utc = valid_until.astimezone(timezone.utc)
+        if now >= valid_until_utc:
+            if (
+                data.get("kp_current") is not None
+                or now - valid_until_utc <= _CURRENT_REFRESH_RECENT_EXPIRY
+            ):
+                self._start_current_refresh_recovery(measured_at, valid_until)
+            return
+
+        if data.get("kp_current") is None:
             return
 
         self._unsub_current_expiry = async_track_point_in_utc_time(
             self.hass,
             partial(self._expire_current, measured_at, valid_until),
-            valid_until.astimezone(timezone.utc),
+            valid_until_utc,
         )
 
     @callback
@@ -159,6 +170,25 @@ class XrasCoordinator(DataUpdateCoordinator):
         self._cancel_current_refresh_retry()
         self._current_refresh_retries_remaining = 0
         self._current_refresh_recovery_slot = None
+
+    @callback
+    def _start_current_refresh_recovery(
+        self, measured_at: datetime, valid_until: datetime
+    ) -> None:
+        """Start one bounded jittered recovery sequence for an expired slot."""
+        if self._shutdown_requested or self._current_refresh_recovery_slot is not None:
+            return
+
+        self._cancel_current_expiry()
+        self._cancel_current_refresh_retry()
+        self._current_refresh_recovery_slot = (measured_at, valid_until)
+        self._current_refresh_retries_remaining = _CURRENT_REFRESH_RETRY_LIMIT
+        self._schedule_current_refresh_attempt(is_retry=False)
+        _LOGGER.debug(
+            "Current Kp for %s reached valid_until %s; scheduled a fresh-slot refresh",
+            self.code,
+            valid_until.isoformat(),
+        )
 
     @callback
     def _schedule_current_refresh_attempt(self, *, is_retry: bool) -> None:
@@ -210,7 +240,6 @@ class XrasCoordinator(DataUpdateCoordinator):
         if not data:
             return
 
-        # Refresh мог успеть принести следующий слот одновременно с таймером.
         if (
             data.get("kp_current_ts") != expected_measured_at
             or data.get("kp_current_valid_until") != expected_valid_until
@@ -221,21 +250,8 @@ class XrasCoordinator(DataUpdateCoordinator):
             self._schedule_current_expiry()
             return
 
-        # Не публикуем искусственный промежуточный unknown: успешный refresh сам
-        # переведёт старое значение напрямую в новый Kp либо в unknown, если XRAS
-        # ещё не опубликовал следующий слот. При сетевой ошибке CoordinatorEntity
-        # штатно станет unavailable через last_update_success=False.
-        self._cancel_current_refresh_retry()
-        self._current_refresh_recovery_slot = (
-            expected_measured_at,
-            expected_valid_until,
-        )
-        self._current_refresh_retries_remaining = _CURRENT_REFRESH_RETRY_LIMIT
-        self._schedule_current_refresh_attempt(is_retry=False)
-        _LOGGER.debug(
-            "Current Kp for %s reached valid_until %s; scheduled a fresh-slot refresh",
-            self.code,
-            expected_valid_until.isoformat(),
+        self._start_current_refresh_recovery(
+            expected_measured_at, expected_valid_until
         )
 
     async def async_shutdown(self) -> None:
@@ -336,14 +352,10 @@ class XrasCoordinator(DataUpdateCoordinator):
         month = sets["month"]
         month_forecast = sets["month_forecast"]
 
-        # Суточные индексы XRAS могут появиться позже первых Kp-слотов нового дня.
-        # Поэтому откатываемся к последнему непустому значению отдельно по полям.
         ap = _latest_daily_value(fact.days, today, "ap")
         f10 = _latest_daily_value(fact.days, today, "f10")
         sn = _latest_daily_value(fact.days, today, "sn")
 
-        # Прогнозные Ap/F10.7 относятся именно к завтрашним суткам. Если такой
-        # строки нет, не подменяем её более поздним или устаревшим днём.
         forecast_tomorrow = (
             forecast.day_for(today + timedelta(days=1)) if forecast else None
         )
@@ -351,15 +363,11 @@ class XrasCoordinator(DataUpdateCoordinator):
         level_key = level_for(current_kp)
         forecast_max_24h = max((point["kp"] for point in next_24h), default=None)
 
-        # Без месячного файла месячные показатели остаются пустыми:
-        # подставлять сюда трёхсуточные данные — значит молча врать о периоде.
         month_daily = month.daily if month else []
         month_days = [row for row in month_daily if row["kp"] is not None]
 
         return {
             "kp_current": current_kp,
-            # Даже когда текущий слот уже протух, сохраняем границы последнего
-            # фактического candidate: это объясняет unknown в UI/диагностике.
             "kp_current_ts": candidate["ts"] if candidate else None,
             "kp_current_valid_until": candidate_valid_until,
             "kp_max_24h": max(
