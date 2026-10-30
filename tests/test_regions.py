@@ -8,9 +8,11 @@ import pytest
 
 from custom_components.xras_geomagnetic.regions import (
     REGION_INDEX_CACHE_TTL,
+    REGION_INDEX_URL,
     Region,
     RegionIndex,
     RegionIndexError,
+    _async_fetch_region_index,
     async_get_region_index,
     normalize_region_query,
     parse_region_index,
@@ -90,6 +92,26 @@ def test_parse_region_index_rejects_duplicate_code_or_slug() -> None:
         parse_region_index(duplicate_code)
     with pytest.raises(RegionIndexError, match="duplicate slug moscow"):
         parse_region_index(duplicate_slug)
+
+
+@pytest.mark.asyncio
+async def test_fetch_region_index_from_xras_source(hass, aioclient_mock) -> None:
+    aioclient_mock.get(REGION_INDEX_URL, text=_SAMPLE_INDEX)
+
+    index = await _async_fetch_region_index(hass)
+
+    assert index.find("Москва")[0].code == "RAL5"
+    assert index.find("riga")[0].code == "RIK0"
+
+
+@pytest.mark.asyncio
+async def test_fetch_region_index_wraps_http_failure(hass, aioclient_mock) -> None:
+    aioclient_mock.get(REGION_INDEX_URL, status=500)
+
+    with pytest.raises(RegionIndexError, match="could not load") as exc_info:
+        await _async_fetch_region_index(hass)
+
+    assert exc_info.value.__cause__ is not None
 
 
 @pytest.mark.asyncio
