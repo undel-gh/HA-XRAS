@@ -44,6 +44,63 @@ def test_month_null_days_are_not_exposed_as_daily_values() -> None:
     assert [row["kp"] for row in dataset.daily] == [5.67, 5.33]
 
 
+def test_numeric_zero_values_are_not_replaced_by_aliases() -> None:
+    payload = {
+        "version": "1.1",
+        "type": "kp",
+        "tzone": "UTC+03",
+        "data": [
+            {
+                "time": "2026-10-23",
+                "f10": 0,
+                "f107": 123,
+                "max_kp": 0,
+                "maxkp": 4.67,
+            }
+        ],
+    }
+
+    dataset = parse_json(payload, "UP03")
+    day = dataset.days[0]
+
+    assert day.f10 == 0.0
+    assert day.max_kp == 0.0
+    assert dataset.daily == [{"date": day.date, "kp": 0.0}]
+
+
+def test_numeric_aliases_are_used_when_primary_value_is_none() -> None:
+    payload = {
+        "version": "1.1",
+        "type": "kp",
+        "tzone": "UTC+03",
+        "data": [
+            {
+                "time": "2026-10-23",
+                "f10": None,
+                "f107": 101,
+                "max_kp": None,
+                "maxkp": 1.33,
+            }
+        ],
+    }
+
+    dataset = parse_json(payload, "UP03")
+    day = dataset.days[0]
+
+    assert day.f10 == 101.0
+    assert day.max_kp == 1.33
+
+
+def test_json_error_field_is_rejected() -> None:
+    with pytest.raises(XrasParseError, match="maintenance"):
+        parse_json({"error": "maintenance"}, "UP03")
+
+
+def test_txt_error_comment_is_rejected() -> None:
+    with pytest.raises(XrasParseError, match="maintenance"):
+        parse_txt("# ERROR: maintenance\n", "UP03")
+
+
 def test_norilsk_h00_is_continuity_point_not_three_hour_slot() -> None:
     dataset = parse_json(_json_fixture("kp_norilsk.json"), "NJ7D")
     day = dataset.day_for(dataset.days[0].date)
