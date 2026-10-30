@@ -290,7 +290,9 @@ class XrasCoordinator(DataUpdateCoordinator):
                     url, headers=headers, timeout=timeout
                 ) as response:
                     response.raise_for_status()
-                    raw = await read_utf8_limited(response, limit=MAX_API_RESPONSE_BYTES)
+                    raw = await read_utf8_limited(
+                        response, limit=MAX_API_RESPONSE_BYTES
+                    )
 
                 if suffix == "json":
                     return parse_json(json.loads(raw), self.code)
