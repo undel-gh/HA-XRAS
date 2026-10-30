@@ -232,7 +232,9 @@ async def test_stale_forecast_day_does_not_become_tomorrow(hass, monkeypatch) ->
 
 
 @pytest.mark.asyncio
-async def test_expiry_refresh_has_no_intermediate_unknown_state(hass, monkeypatch) -> None:
+async def test_expiry_refresh_has_no_intermediate_unknown_state(
+    hass, monkeypatch
+) -> None:
     """A ready next slot must produce one old->new state notification."""
     coordinator = XrasCoordinator(hass, _entry())
     measured_at = NOW - timedelta(hours=3)
