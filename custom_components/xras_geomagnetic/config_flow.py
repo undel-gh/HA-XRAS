@@ -123,6 +123,7 @@ async def _validate(hass, code: str) -> str:
         except (
             aiohttp.ClientError,
             TimeoutError,
+            UnicodeDecodeError,
             json.JSONDecodeError,
             XrasParseError,
         ) as err:
@@ -165,7 +166,7 @@ async def _code_from_region(hass, value: str) -> str:
             page = await response.text(encoding="utf-8")
     except RegionNotFound:
         raise
-    except (aiohttp.ClientError, TimeoutError) as err:
+    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError) as err:
         _LOGGER.debug("XRAS region lookup failed for %s", url, exc_info=True)
         raise CannotConnect(f"не удалось открыть страницу региона {value!r}") from err
 
