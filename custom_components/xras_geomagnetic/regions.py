@@ -86,7 +86,9 @@ def parse_region_index(text: str) -> RegionIndex:
     try:
         rows, _end = json.JSONDecoder().raw_decode(payload)
     except json.JSONDecodeError as err:
-        raise RegionIndexError("XRAS region index contains invalid reglist JSON") from err
+        raise RegionIndexError(
+            "XRAS region index contains invalid reglist JSON"
+        ) from err
 
     if not isinstance(rows, list) or not rows:
         raise RegionIndexError("XRAS region index reglist is empty or invalid")
