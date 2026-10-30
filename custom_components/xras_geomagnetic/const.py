@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 DOMAIN = "xras_geomagnetic"
 
 BASE_URL = "https://xras.ru/txt"
@@ -22,6 +24,9 @@ DEFAULT_SCAN_INTERVAL = 600
 MIN_SCAN_INTERVAL = 300
 MAX_SCAN_INTERVAL = 86400
 REQUEST_TIMEOUT = 30
+
+REGION_CODE_PATTERN = r"[A-Za-z0-9]{3,8}"
+REGION_CODE_RE = re.compile(REGION_CODE_PATTERN)
 
 USER_AGENT = "HomeAssistant-xras_geomagnetic (+https://github.com/undel-gh/HA-XRAS)"
 
