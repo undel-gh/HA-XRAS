@@ -32,6 +32,12 @@ from .const import (
     REQUEST_TIMEOUT,
     USER_AGENT,
 )
+from .http import (
+    MAX_API_RESPONSE_BYTES,
+    MAX_REGION_RESPONSE_BYTES,
+    XrasResponseTooLarge,
+    read_utf8_limited,
+)
 from .parser import XrasParseError, parse_json, parse_txt
 
 _LOGGER = logging.getLogger(__name__)
@@ -108,7 +114,7 @@ async def _validate(hass, code: str) -> str:
         try:
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 response.raise_for_status()
-                raw = await response.text(encoding="utf-8")
+                raw = await read_utf8_limited(response, limit=MAX_API_RESPONSE_BYTES)
             dataset = (
                 parse_json(json.loads(raw), code)
                 if suffix == "json"
@@ -124,6 +130,7 @@ async def _validate(hass, code: str) -> str:
             aiohttp.ClientError,
             TimeoutError,
             UnicodeDecodeError,
+            XrasResponseTooLarge,
             json.JSONDecodeError,
             XrasParseError,
         ) as err:
@@ -163,10 +170,15 @@ async def _code_from_region(hass, value: str) -> str:
             if 300 <= response.status < 400 or response.status == 404:
                 raise RegionNotFound(value)
             response.raise_for_status()
-            page = await response.text(encoding="utf-8")
+            page = await read_utf8_limited(response, limit=MAX_REGION_RESPONSE_BYTES)
     except RegionNotFound:
         raise
-    except (aiohttp.ClientError, TimeoutError, UnicodeDecodeError) as err:
+    except (
+        aiohttp.ClientError,
+        TimeoutError,
+        UnicodeDecodeError,
+        XrasResponseTooLarge,
+    ) as err:
         _LOGGER.debug("XRAS region lookup failed for %s", url, exc_info=True)
         raise CannotConnect(f"не удалось открыть страницу региона {value!r}") from err
 

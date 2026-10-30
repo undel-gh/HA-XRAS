@@ -32,6 +32,7 @@ from .const import (
     STORM_THRESHOLD,
     USER_AGENT,
 )
+from .http import MAX_API_RESPONSE_BYTES, XrasResponseTooLarge, read_utf8_limited
 from .parser import Dataset, XrasParseError, parse_json, parse_txt, tz_from_string
 
 _LOGGER = logging.getLogger(__name__)
@@ -289,7 +290,9 @@ class XrasCoordinator(DataUpdateCoordinator):
                     url, headers=headers, timeout=timeout
                 ) as response:
                     response.raise_for_status()
-                    raw = await response.text(encoding="utf-8")
+                    raw = await read_utf8_limited(
+                        response, limit=MAX_API_RESPONSE_BYTES
+                    )
 
                 if suffix == "json":
                     return parse_json(json.loads(raw), self.code)
@@ -299,6 +302,7 @@ class XrasCoordinator(DataUpdateCoordinator):
                 aiohttp.ClientError,
                 TimeoutError,
                 UnicodeDecodeError,
+                XrasResponseTooLarge,
                 json.JSONDecodeError,
                 XrasParseError,
             ) as err:
