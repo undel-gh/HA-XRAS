@@ -22,7 +22,7 @@ _LOGGER = logging.getLogger(__name__)
 REGION_INDEX_URL = "https://xras.ru/js/regions"
 REGION_INDEX_CACHE_TTL = 3600
 _MAX_REGION_INDEX_BYTES = 128 * 1024
-_REGION_INDEX_MARKER = "var reglist ="
+_REGION_INDEX_MARKER_RE = re.compile(r"\bvar\s+reglist\s*=")
 _REGION_SLUG_RE = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
 _NORMALIZE_RE = re.compile(r"[a-z0-9а-я]+")
 _CACHE_KEY = f"{DOMAIN}_region_index_cache"
@@ -78,11 +78,11 @@ def normalize_region_query(value: str) -> str:
 
 def parse_region_index(text: str) -> RegionIndex:
     """Parse and validate the JSON array embedded in XRAS /js/regions."""
-    marker_pos = text.find(_REGION_INDEX_MARKER)
-    if marker_pos < 0:
+    marker = _REGION_INDEX_MARKER_RE.search(text)
+    if marker is None:
         raise RegionIndexError("XRAS region index does not contain reglist")
 
-    payload = text[marker_pos + len(_REGION_INDEX_MARKER) :].lstrip()
+    payload = text[marker.end() :].lstrip()
     try:
         rows, _end = json.JSONDecoder().raw_decode(payload)
     except json.JSONDecodeError as err:
@@ -144,10 +144,7 @@ async def _async_fetch_region_index(hass: HomeAssistant) -> RegionIndex:
         TimeoutError,
         UnicodeDecodeError,
         XrasResponseTooLarge,
-        RegionIndexError,
     ) as err:
-        if isinstance(err, RegionIndexError):
-            raise
         raise RegionIndexError("could not load XRAS region index") from err
 
 
