@@ -22,7 +22,7 @@ from .entity import XrasEntity
 
 
 @dataclass(frozen=True, kw_only=True)
-class XrasSensorDescription(SensorEntityDescription):  # noqa: D101
+class XrasSensorDescription(SensorEntityDescription):
     """Описание сенсора с функциями значения и атрибутов."""
 
     value_fn: Callable[[dict], Any]
