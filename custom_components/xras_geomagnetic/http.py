@@ -19,10 +19,10 @@ async def read_utf8_limited(
     response: aiohttp.ClientResponse, *, limit: int
 ) -> str:
     """Read and decode a response without buffering more than limit + 1 bytes."""
-    if response.content_length is not None and response.content_length > limit:
+    content_length = getattr(response, "content_length", None)
+    if content_length is not None and content_length > limit:
         raise XrasResponseTooLarge(
-            f"XRAS response exceeds {limit} bytes (Content-Length: "
-            f"{response.content_length})"
+            f"XRAS response exceeds {limit} bytes (Content-Length: {content_length})"
         )
 
     body = bytearray()
