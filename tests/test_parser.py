@@ -91,6 +91,20 @@ def test_numeric_aliases_are_used_when_primary_value_is_none() -> None:
     assert day.max_kp == 1.33
 
 
+def test_empty_time_falls_through_to_date_alias() -> None:
+    payload = {
+        "version": "1.1",
+        "type": "kp",
+        "tzone": "UTC+03",
+        "data": [{"time": "", "date": "2026-10-23", "max_kp": 0}],
+    }
+
+    dataset = parse_json(payload, "UP03")
+
+    assert dataset.days[0].date.isoformat() == "2026-10-23"
+    assert dataset.days[0].max_kp == 0.0
+
+
 def test_json_error_field_is_rejected() -> None:
     with pytest.raises(XrasParseError, match="maintenance"):
         parse_json({"error": "maintenance"}, "UP03")
