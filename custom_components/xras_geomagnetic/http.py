@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import aiohttp
 
+# XRAS API payloads are normally only a few KiB. Keep generous ceilings while
+# preventing an upstream/proxy error from making Home Assistant buffer unbounded data.
 MAX_API_RESPONSE_BYTES = 256 * 1024
 MAX_REGION_RESPONSE_BYTES = 1024 * 1024
 _READ_CHUNK_BYTES = 64 * 1024
