@@ -28,7 +28,7 @@ _BASE_KP_COLUMNS = ["time", "f10", "sn", "ap", "k", "max_kp"]
 _SLOT_RE = re.compile(r"^h(\d{2})$")
 _COLUMN_RE = re.compile(r"\[(\d+)\]\s*([A-Za-z0-9_]+)")
 _TZONE_RE = re.compile(r"UTC\s*([+-])\s*(\d{1,2})(?::?(\d{2}))?", re.IGNORECASE)
-_CODE_RE = re.compile(r"^U([PM])(\d{2})(\d{2})?$", re.IGNORECASE)
+_OFFSET_CODE_RE = re.compile(r"^U([PM])(\d{2})(\d{2})?$", re.IGNORECASE)
 
 _NULLS = {"", "null", "none", "nan", "-", "—", "n/a"}
 
@@ -119,7 +119,7 @@ def tz_from_string(value: str | None) -> timezone | None:
         except ValueError:
             return None
 
-    match = _CODE_RE.match(text)
+    match = _OFFSET_CODE_RE.match(text)
     if match:
         sign = 1 if match.group(1).upper() == "P" else -1
         try:
