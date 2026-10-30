@@ -185,6 +185,15 @@ def _to_date(value: Any) -> date | None:
         return None
 
 
+def _pick(row: dict[str, Any], *names: str) -> Any:
+    """Return the first non-None alias value without treating numeric zero as empty."""
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value
+    return None
+
+
 def _day_from_mapping(row: dict[str, Any]) -> Day | None:
     lowered = {str(key).strip().lower(): value for key, value in row.items()}
 
@@ -194,11 +203,11 @@ def _day_from_mapping(row: dict[str, Any]) -> Day | None:
 
     day = Day(
         date=day_date,
-        f10=_to_float(lowered.get("f10") or lowered.get("f107")),
+        f10=_to_float(_pick(lowered, "f10", "f107")),
         sn=_to_float(lowered.get("sn")),
         ap=_to_float(lowered.get("ap")),
         k=_to_float(lowered.get("k")),
-        max_kp=_to_float(lowered.get("max_kp") or lowered.get("maxkp")),
+        max_kp=_to_float(_pick(lowered, "max_kp", "maxkp")),
     )
 
     for key, value in lowered.items():
