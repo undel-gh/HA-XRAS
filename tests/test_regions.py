@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -41,6 +42,14 @@ def test_parse_region_index_and_lookup_names_and_slugs() -> None:
     assert index.find("moscow")[0].code == "RAL5"
     assert index.find("Saint Petersburg")[0].code == "S0KJ"
     assert index.find("Кишинев")[0].code == "PUKF"
+
+
+def test_parse_region_index_accepts_marker_whitespace_changes() -> None:
+    text = _SAMPLE_INDEX.replace("var reglist =", "var\n\treglist=")
+
+    index = parse_region_index(text)
+
+    assert index.find("Москва")[0].code == "RAL5"
 
 
 def test_region_index_preserves_ambiguous_names() -> None:
@@ -125,6 +134,33 @@ async def test_region_index_is_cached_for_one_hour(hass) -> None:
     ):
         assert await async_get_region_index(hass) is index
         assert await async_get_region_index(hass) is index
+
+    fetch.assert_awaited_once_with(hass)
+
+
+@pytest.mark.asyncio
+async def test_region_index_concurrent_callers_share_single_fetch(hass) -> None:
+    index = RegionIndex((Region("RAL5", "Москва", "moscow", "ru"),))
+    started = asyncio.Event()
+    release = asyncio.Event()
+
+    async def fetch_once(_hass):
+        started.set()
+        await release.wait()
+        return index
+
+    fetch = AsyncMock(side_effect=fetch_once)
+    with patch(
+        "custom_components.xras_geomagnetic.regions._async_fetch_region_index",
+        fetch,
+    ):
+        tasks = [
+            asyncio.create_task(async_get_region_index(hass)) for _ in range(3)
+        ]
+        await started.wait()
+        await asyncio.sleep(0)
+        release.set()
+        assert await asyncio.gather(*tasks) == [index, index, index]
 
     fetch.assert_awaited_once_with(hass)
 
