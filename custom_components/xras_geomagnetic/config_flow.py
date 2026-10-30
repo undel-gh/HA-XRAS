@@ -39,6 +39,7 @@ from .http import (
     read_utf8_limited,
 )
 from .parser import XrasParseError, parse_json, parse_txt
+from .regions import RegionIndexError, async_get_region_index
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -47,8 +48,9 @@ _CODE_IN_PAGE = re.compile(
     rf"/txt/(?:kpfl|kpf|kpm|kp)_({REGION_CODE_PATTERN})(?:_\d{{6}})?\.(?:json|txt)"
 )
 
-# Русские названия -> слаг страницы региона на сайте.
-_ALIASES = {
+# Старые короткие/русские варианты сохраняем как fallback на случай, если
+# официальный /js/regions временно недоступен. Основной поиск идёт по каталогу.
+_FALLBACK_ALIASES = {
     "москва": "moscow",
     "рига": "riga",
     "санкт-петербург": "saint_petersburg",
@@ -63,6 +65,7 @@ _ALIASES = {
     "норильск": "norilsk",
     "ташкент": "tashkent",
 }
+_SLUG_RE = re.compile(r"[a-z0-9_\-]+")
 
 
 class CannotConnect(Exception):
@@ -71,6 +74,10 @@ class CannotConnect(Exception):
 
 class RegionNotFound(Exception):
     """Регион не найден по введённому названию или слагу."""
+
+
+class RegionAmbiguous(Exception):
+    """Название соответствует нескольким регионам XRAS."""
 
 
 class _CodeNotFound(Exception):
@@ -145,17 +152,17 @@ async def _validate(hass, code: str) -> str:
 
 
 def _slug(value: str) -> str:
-    """«Санкт-Петербург» или «Saint Petersburg» -> saint_petersburg."""
-    text = value.strip().lower()
-    if text in _ALIASES:
-        return _ALIASES[text]
+    """Convert known aliases or a Latin name into an XRAS page slug."""
+    text = value.strip().casefold()
+    if text in _FALLBACK_ALIASES:
+        return _FALLBACK_ALIASES[text]
     return re.sub(r"\s+", "_", text)
 
 
 async def _code_from_region(hass, value: str) -> str:
     """Достать код из страницы региона по ссылке «API: JSON»."""
     slug = _slug(value)
-    if not re.fullmatch(r"[a-z0-9_\-]+", slug):
+    if not _SLUG_RE.fullmatch(slug):
         raise RegionNotFound(value)
 
     session = async_get_clientsession(hass)
@@ -194,6 +201,35 @@ async def _code_from_region(hass, value: str) -> str:
     return codes.pop()
 
 
+async def _code_from_catalog(hass, value: str) -> str:
+    """Resolve a region name/slug through the official XRAS region index."""
+    alias = _FALLBACK_ALIASES.get(value.strip().casefold())
+    query = alias or value
+    try:
+        index = await async_get_region_index(hass)
+    except RegionIndexError as err:
+        # Preserve the pre-catalog paths during an index outage: known aliases and
+        # explicit Latin slugs can still be resolved from their XRAS region page.
+        if _SLUG_RE.fullmatch(_slug(value)):
+            return await _code_from_region(hass, value)
+        raise CannotConnect("не удалось загрузить каталог регионов XRAS") from err
+
+    matches = index.find(query)
+    if len(matches) > 1:
+        _LOGGER.debug(
+            "XRAS region query %r is ambiguous: %s",
+            value,
+            [(region.code, region.slug) for region in matches],
+        )
+        raise RegionAmbiguous(value)
+    if len(matches) == 1:
+        return matches[0].code
+
+    # Keep page lookup as a forward-compatible fallback if XRAS adds a slug that
+    # has not yet appeared in the cached index or exposes a page-only alias.
+    return await _code_from_region(hass, value)
+
+
 async def _resolve(hass, value: str) -> tuple[str, str]:
     """Вернуть (код, часовая зона). Принимает и код, и название региона."""
     value = value.strip()
@@ -208,12 +244,12 @@ async def _resolve(hass, value: str) -> tuple[str, str]:
             # ASCII-имя вроде "moscow" выглядит как код, но может быть slug.
             pass
 
-    code = await _code_from_region(hass, value)
+    code = await _code_from_catalog(hass, value)
     try:
         return code, await _validate(hass, code)
     except _CodeNotFound as err:
-        # Страница региона сослалась на отсутствующий API-код: это уже сбой
-        # источника, а не пользовательская ошибка написания региона.
+        # Каталог/страница региона сослались на отсутствующий API-код: это уже
+        # сбой источника, а не пользовательская ошибка написания региона.
         raise CannotConnect(
             f"регион {value!r} ссылается на недоступный код {code}"
         ) from err
@@ -236,6 +272,8 @@ class XrasConfigFlow(ConfigFlow, domain=DOMAIN):
             interval_value = int(user_input[CONF_SCAN_INTERVAL])
             try:
                 code, _tzone = await _resolve(self.hass, code_value)
+            except RegionAmbiguous:
+                errors["base"] = "ambiguous_region"
             except RegionNotFound:
                 errors["base"] = "invalid_region"
             except CannotConnect:
