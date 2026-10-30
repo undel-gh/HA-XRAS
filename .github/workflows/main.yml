@@ -18,7 +18,59 @@ concurrency:
 
 jobs:
   tests:
-    name: Tests
+    name: Tests (HA ${{ matrix.ha }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ha: "2024.12.0"
+            # Match the oldest supported HA generation and its test harness.
+            python: "3.12"
+            requirements: requirements_test_minimum.txt
+          - ha: "2026.10.1"
+            python: "3.14"
+            requirements: requirements_test.txt
+          - ha: "2026.10.4"
+            python: "3.14"
+            requirements: requirements_test_latest.txt
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: ${{ matrix.requirements }}
+
+      - name: Install test dependencies
+        run: python -m pip install -r "${{ matrix.requirements }}"
+
+      - name: Verify Home Assistant version
+        env:
+          EXPECTED_HA: ${{ matrix.ha }}
+        run: |
+          python - <<'PY'
+          import os
+          from importlib.metadata import version
+
+          actual = version("homeassistant")
+          expected = os.environ["EXPECTED_HA"]
+          print(f"Home Assistant {actual}")
+          assert actual == expected, f"expected Home Assistant {expected}, got {actual}"
+          PY
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Check English translation parity
+        run: cmp custom_components/xras_geomagnetic/strings.json custom_components/xras_geomagnetic/translations/en.json
+
+  lint:
+    name: Ruff
     runs-on: ubuntu-latest
 
     steps:
@@ -28,18 +80,15 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.14"
           cache: pip
-          cache-dependency-path: requirements_test.txt
+          cache-dependency-path: requirements_lint.txt
 
-      - name: Install test dependencies
-        run: python -m pip install -r requirements_test.txt
+      - name: Install lint dependencies
+        run: python -m pip install -r requirements_lint.txt
 
-      - name: Run tests
-        run: python -m pytest -q
-
-      - name: Check English translation parity
-        run: cmp custom_components/xras_geomagnetic/strings.json custom_components/xras_geomagnetic/translations/en.json
+      - name: Run Ruff
+        run: ruff check custom_components --select E,F,W,B
 
   hassfest:
     name: Hassfest

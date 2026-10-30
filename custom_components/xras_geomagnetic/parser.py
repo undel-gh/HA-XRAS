@@ -355,7 +355,7 @@ def parse_txt(text: str, tz_hint: str | None = None) -> Dataset:
             raise XrasParseError(
                 f"число колонок TXT не совпадает с шапкой: {len(parts)} != {len(names)}"
             )
-        row = dict(zip(names, parts))
+        row = dict(zip(names, parts, strict=True))
         day = _day_from_mapping(row)
         if day:
             dataset.days.append(day)

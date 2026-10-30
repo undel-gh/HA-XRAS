@@ -218,45 +218,19 @@ yaxis:
 
 ```yaml
 type: custom:mushroom-template-card
-primary: "Kp {{ state_attr('sensor.your_kp_entity','kp_display') }}"
-secondary: "{{ states('sensor.your_storm_level_entity') }}"
+primary: "{{ states('sensor.your_storm_level_entity') }}"
+secondary: "Kp {{ states('sensor.your_kp_entity') }}"
 icon: mdi:magnet
-icon_color: >
-  {% set raw = states('sensor.your_kp_entity') %}
-  {% if not is_number(raw) %} disabled
-  {% else %}
-    {% set kp = raw | float %}
-    {% if kp >= 7 %} red
-    {% elif kp >= 5 %} orange
-    {% elif kp >= 4 %} amber
-    {% else %} green {% endif %}
+icon_color: >-
+  {% set kp = states('sensor.your_kp_entity') | float(0) %}
+  {% if kp < 4 %} green
+  {% elif kp < 5 %} orange
+  {% elif kp < 6 %} red
+  {% else %} purple
   {% endif %}
 ```
 
-## Автоматизация
-
-```yaml
-automation:
-  - alias: Предупреждение о магнитной буре
-    triggers:
-      - trigger: state
-        entity_id: binary_sensor.your_storm_forecast_entity
-        to: "on"
-    actions:
-      - action: notify.mobile_app
-        data:
-          title: Ожидается магнитная буря
-          message: >
-            {{ states('sensor.your_storm_level_entity') }},
-            прогноз Kp до
-            {{ states('sensor.your_kp_forecast_24h_entity') }}
-```
-
-Для уведомления «буря закончилась» задавайте `to: "off"`, а не только
-`from: "on"`: тогда временная `unavailable` из-за сетевой ошибки не будет
-интерпретирована как окончание бури.
-
-## Вариант без интеграции (только YAML)
+## Вариант без интеграции (YAML)
 
 Если ставить компонент не хочется — штатный `rest`-сенсор. Данные в файле идут
 от новых суток к старым. Пример ниже рассчитан именно на московский файл
@@ -326,14 +300,27 @@ rest:
 
 ## Разработка и тесты
 
-Тесты используют закреплённые версии `pytest` и
-`pytest-homeassistant-custom-component` и запускаются тем же workflow, что
-Hassfest и HACS validation:
+CI запускает pytest на трёх явно закреплённых профилях Home Assistant. Каждый
+профиль использует свой `pytest-homeassistant-custom-component`, который пинит
+совместимые версии Home Assistant и pytest:
+
+| Профиль | Home Assistant | Python | Requirements |
+| --- | --- | --- | --- |
+| minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
+| production | `2026.10.1` | `3.14` | `requirements_test.txt` |
+| latest stable | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+
+Для локального запуска выберите файл requirements, соответствующий вашей
+версии Python. Например, production-профиль требует Python 3.14:
 
 ```bash
 python -m pip install -r requirements_test.txt
 python -m pytest -q
 ```
+
+Minimum-профиль дополнительно фиксирует `pycares==4.5.0`: у HA 2024.12.0
+зависимость допускает более новые версии без верхней границы, а современный
+`pycares` уже несовместим с cleanup-проверкой старого тестового harness.
 
 Фикстуры в `tests/fixtures/` покрывают JSON/TXT, обратный порядок дат,
 строковые `"null"`, именованные часовые зоны и региональную фазу слотов

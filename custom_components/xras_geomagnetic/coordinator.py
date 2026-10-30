@@ -110,7 +110,8 @@ class XrasCoordinator(DataUpdateCoordinator):
                 self._schedule_current_refresh_attempt(is_retry=True)
             else:
                 _LOGGER.debug(
-                    "Current Kp for %s is still unavailable after bounded expiry retries",
+                    "Current Kp for %s is still unavailable after bounded "
+                    "expiry retries",
                     self.code,
                 )
                 self._stop_current_refresh_recovery()
@@ -316,7 +317,9 @@ class XrasCoordinator(DataUpdateCoordinator):
         )
 
         sets: dict[str, Dataset | None] = {}
-        for (key, (prefix, required)), result in zip(DATASETS.items(), results):
+        for (key, (prefix, required)), result in zip(
+            DATASETS.items(), results, strict=True
+        ):
             if isinstance(result, asyncio.CancelledError):
                 raise result
             if isinstance(result, Exception):

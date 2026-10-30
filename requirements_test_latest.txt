@@ -1,0 +1,2 @@
+# Latest stable Home Assistant at the time this matrix was introduced: 2026.10.4.
+pytest-homeassistant-custom-component==0.13.375

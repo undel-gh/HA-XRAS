@@ -1,0 +1,8 @@
+# Minimum supported Home Assistant 2024.12.0 test profile.
+pytest-homeassistant-custom-component==0.13.190
+
+# HA 2024.12 / aiodns 3.2.0 only declares pycares>=4.0.0. Without a
+# historical pin, a 2026 install resolves pycares 5.x, whose background safe
+# shutdown thread is not recognized by the 2024-era pytest cleanup plugin.
+# 4.5.0 was the current pycares release when HA 2024.12.0 was released.
+pycares==4.5.0
