@@ -197,6 +197,8 @@ def _pick(row: dict[str, Any], *names: str) -> Any:
 def _day_from_mapping(row: dict[str, Any]) -> Day | None:
     lowered = {str(key).strip().lower(): value for key, value in row.items()}
 
+    # Deliberately use ``or`` here: an empty ``time`` must fall through to
+    # ``date``. Numeric aliases below use _pick() because zero is meaningful.
     day_date = _to_date(lowered.get("time") or lowered.get("date"))
     if day_date is None:
         return None
