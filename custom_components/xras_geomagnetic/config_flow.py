@@ -27,6 +27,8 @@ from .const import (
     DOMAIN,
     MAX_SCAN_INTERVAL,
     MIN_SCAN_INTERVAL,
+    REGION_CODE_PATTERN,
+    REGION_CODE_RE,
     REQUEST_TIMEOUT,
     USER_AGENT,
 )
@@ -36,9 +38,8 @@ _LOGGER = logging.getLogger(__name__)
 
 # Ссылки вида /txt/kp_RAL5.json или /txt/kpm_RAL5_202506.json.
 _CODE_IN_PAGE = re.compile(
-    r"/txt/(?:kpfl|kpf|kpm|kp)_([A-Za-z0-9]{3,8})(?:_\d{6})?\.(?:json|txt)"
+    rf"/txt/(?:kpfl|kpf|kpm|kp)_({REGION_CODE_PATTERN})(?:_\d{{6}})?\.(?:json|txt)"
 )
-_DIRECT_CODE = re.compile(r"[A-Za-z0-9]{3,8}")
 
 # Русские названия -> слаг страницы региона на сайте.
 _ALIASES = {
@@ -107,7 +108,7 @@ async def _validate(hass, code: str) -> str:
         try:
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 response.raise_for_status()
-                raw = await response.text()
+                raw = await response.text(encoding="utf-8")
             dataset = (
                 parse_json(json.loads(raw), code)
                 if suffix == "json"
@@ -161,7 +162,7 @@ async def _code_from_region(hass, value: str) -> str:
             if 300 <= response.status < 400 or response.status == 404:
                 raise RegionNotFound(value)
             response.raise_for_status()
-            page = await response.text()
+            page = await response.text(encoding="utf-8")
     except RegionNotFound:
         raise
     except (aiohttp.ClientError, TimeoutError) as err:
@@ -186,7 +187,7 @@ async def _resolve(hass, value: str) -> tuple[str, str]:
 
     # Кириллица, пробелы и URL-слаги не являются кодами XRAS, поэтому не делаем
     # перед поиском региона два заведомо лишних запроса к kp_<value>.*.
-    if _DIRECT_CODE.fullmatch(value):
+    if REGION_CODE_RE.fullmatch(value):
         code = value.upper()
         try:
             return code, await _validate(hass, code)
