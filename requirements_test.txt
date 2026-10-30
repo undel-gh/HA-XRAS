@@ -1,2 +1,4 @@
-pytest==9.0.0
-pytest-homeassistant-custom-component==0.13.316
+# Production Home Assistant 2026.10.1 test profile.
+# pytest-homeassistant-custom-component pins the matching Home Assistant,
+# pytest and Home Assistant test dependency versions.
+pytest-homeassistant-custom-component==0.13.372
