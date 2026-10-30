@@ -26,9 +26,10 @@ async def read_utf8_limited(
         )
 
     body = bytearray()
+    stream = response.content
     while True:
         remaining = limit + 1 - len(body)
-        chunk = await response.content.read(min(_READ_CHUNK_BYTES, remaining))
+        chunk = await stream.read(min(_READ_CHUNK_BYTES, remaining))
         if not chunk:
             return body.decode("utf-8")
 
