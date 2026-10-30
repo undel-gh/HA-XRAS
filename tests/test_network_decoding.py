@@ -29,16 +29,29 @@ from custom_components.xras_geomagnetic.http import (
 
 
 class _FakeContent:
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, *, drip: int | None = None) -> None:
         self._body = body
+        self._drip = drip
         self.offset = 0
         self.max_requested = 0
+        self.read_calls = 0
 
     async def read(self, size: int = -1) -> bytes:
+        self.read_calls += 1
         self.max_requested = max(self.max_requested, size)
         if self.offset >= len(self._body):
             return b""
-        end = len(self._body) if size < 0 else min(len(self._body), self.offset + size)
+
+        effective_size = size
+        if self._drip is not None:
+            effective_size = (
+                self._drip if size < 0 else min(size, self._drip)
+            )
+        end = (
+            len(self._body)
+            if effective_size < 0
+            else min(len(self._body), self.offset + effective_size)
+        )
         chunk = self._body[self.offset : end]
         self.offset = end
         return chunk
@@ -52,9 +65,12 @@ class _FakeResponse:
         body: bytes | None = None,
         status: int = 200,
         content_length: int | None = None,
+        drip: int | None = None,
     ) -> None:
         self.status = status
-        self.content = _FakeContent(body if body is not None else text.encode("utf-8"))
+        self.content = _FakeContent(
+            body if body is not None else text.encode("utf-8"), drip=drip
+        )
         self.content_length = content_length
 
     async def __aenter__(self) -> _FakeResponse:
@@ -104,6 +120,15 @@ async def test_limited_reader_accepts_exact_limit() -> None:
 
     assert await read_utf8_limited(response, limit=8) == "abcdefgh"
     assert response.content.offset == 8
+
+
+@pytest.mark.asyncio
+async def test_limited_reader_handles_short_stream_reads() -> None:
+    response = _FakeResponse(body=b"abcdefgh", drip=2)
+
+    assert await read_utf8_limited(response, limit=8) == "abcdefgh"
+    assert response.content.offset == 8
+    assert response.content.read_calls == 5
 
 
 @pytest.mark.asyncio
