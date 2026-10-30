@@ -114,9 +114,7 @@ async def _validate(hass, code: str) -> str:
         try:
             async with session.get(url, headers=headers, timeout=timeout) as response:
                 response.raise_for_status()
-                raw = await read_utf8_limited(
-                    response, limit=MAX_API_RESPONSE_BYTES
-                )
+                raw = await read_utf8_limited(response, limit=MAX_API_RESPONSE_BYTES)
             dataset = (
                 parse_json(json.loads(raw), code)
                 if suffix == "json"
@@ -172,9 +170,7 @@ async def _code_from_region(hass, value: str) -> str:
             if 300 <= response.status < 400 or response.status == 404:
                 raise RegionNotFound(value)
             response.raise_for_status()
-            page = await read_utf8_limited(
-                response, limit=MAX_REGION_RESPONSE_BYTES
-            )
+            page = await read_utf8_limited(response, limit=MAX_REGION_RESPONSE_BYTES)
     except RegionNotFound:
         raise
     except (
