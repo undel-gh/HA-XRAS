@@ -218,17 +218,43 @@ yaxis:
 
 ```yaml
 type: custom:mushroom-template-card
-primary: "{{ states('sensor.your_storm_level_entity') }}"
-secondary: "Kp {{ states('sensor.your_kp_entity') }}"
+primary: "Kp {{ state_attr('sensor.your_kp_entity','kp_display') }}"
+secondary: "{{ states('sensor.your_storm_level_entity') }}"
 icon: mdi:magnet
-icon_color: >-
-  {% set kp = states('sensor.your_kp_entity') | float(0) %}
-  {% if kp < 4 %} green
-  {% elif kp < 5 %} orange
-  {% elif kp < 6 %} red
-  {% else %} purple
+icon_color: >
+  {% set raw = states('sensor.your_kp_entity') %}
+  {% if not is_number(raw) %} disabled
+  {% else %}
+    {% set kp = raw | float %}
+    {% if kp >= 7 %} red
+    {% elif kp >= 5 %} orange
+    {% elif kp >= 4 %} amber
+    {% else %} green {% endif %}
   {% endif %}
 ```
+
+## Автоматизация
+
+```yaml
+automation:
+  - alias: Предупреждение о магнитной буре
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.your_storm_forecast_entity
+        to: "on"
+    actions:
+      - action: notify.mobile_app
+        data:
+          title: Ожидается магнитная буря
+          message: >
+            {{ states('sensor.your_storm_level_entity') }},
+            прогноз Kp до
+            {{ states('sensor.your_kp_forecast_24h_entity') }}
+```
+
+Для уведомления «буря закончилась» задавайте `to: "off"`, а не только
+`from: "on"`: тогда временная `unavailable` из-за сетевой ошибки не будет
+интерпретирована как окончание бури.
 
 ## Вариант без интеграции (YAML)
 
