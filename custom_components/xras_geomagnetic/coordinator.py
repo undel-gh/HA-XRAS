@@ -298,6 +298,7 @@ class XrasCoordinator(DataUpdateCoordinator):
             except (
                 aiohttp.ClientError,
                 TimeoutError,
+                UnicodeDecodeError,
                 json.JSONDecodeError,
                 XrasParseError,
             ) as err:
