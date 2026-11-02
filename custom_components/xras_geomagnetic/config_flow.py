@@ -21,11 +21,15 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from .const import (
     BASE_URL,
     CONF_CODE,
+    CONF_HISTORY_MONTHS,
     CONF_SCAN_INTERVAL,
     DEFAULT_CODE,
+    DEFAULT_HISTORY_MONTHS,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
+    MAX_HISTORY_MONTHS,
     MAX_SCAN_INTERVAL,
+    MIN_HISTORY_MONTHS,
     MIN_SCAN_INTERVAL,
     REGION_CODE_PATTERN,
     REGION_CODE_RE,
@@ -96,13 +100,17 @@ def _user_schema(code: str, interval: int) -> vol.Schema:
     )
 
 
-def _options_schema(interval: int) -> vol.Schema:
+def _options_schema(interval: int, history_months: int) -> vol.Schema:
     return vol.Schema(
         {
             vol.Required(CONF_SCAN_INTERVAL, default=interval): vol.All(
                 vol.Coerce(int),
                 vol.Range(min=MIN_SCAN_INTERVAL, max=MAX_SCAN_INTERVAL),
-            )
+            ),
+            vol.Required(CONF_HISTORY_MONTHS, default=history_months): vol.All(
+                vol.Coerce(int),
+                vol.Range(min=MIN_HISTORY_MONTHS, max=MAX_HISTORY_MONTHS),
+            ),
         }
     )
 
@@ -309,7 +317,10 @@ class XrasOptionsFlow(OptionsFlow):
     ) -> ConfigFlowResult:
         if user_input is not None:
             return self.async_create_entry(
-                data={CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL])}
+                data={
+                    CONF_SCAN_INTERVAL: int(user_input[CONF_SCAN_INTERVAL]),
+                    CONF_HISTORY_MONTHS: int(user_input[CONF_HISTORY_MONTHS]),
+                }
             )
 
         interval = int(
@@ -320,7 +331,15 @@ class XrasOptionsFlow(OptionsFlow):
                 ),
             )
         )
+        history_months = int(
+            self.config_entry.options.get(
+                CONF_HISTORY_MONTHS,
+                self.config_entry.data.get(
+                    CONF_HISTORY_MONTHS, DEFAULT_HISTORY_MONTHS
+                ),
+            )
+        )
         return self.async_show_form(
             step_id="init",
-            data_schema=_options_schema(interval),
+            data_schema=_options_schema(interval, history_months),
         )
