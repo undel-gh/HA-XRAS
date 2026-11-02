@@ -73,13 +73,13 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     coordinator = XrasCoordinator(hass, entry)
     await coordinator.async_config_entry_first_refresh()
+    entry.runtime_data = coordinator
 
     history = XrasHistoryBackfill(hass, entry, coordinator)
     coordinator.history = history
     history.start()
     entry.async_on_unload(history.shutdown)
 
-    entry.runtime_data = coordinator
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     return True
