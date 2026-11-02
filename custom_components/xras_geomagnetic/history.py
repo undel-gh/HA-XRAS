@@ -32,6 +32,7 @@ from .const import (
     CONF_CODE,
     CONF_HISTORY_MONTHS,
     DOMAIN,
+    MIN_SCAN_INTERVAL,
     REQUEST_TIMEOUT,
     USER_AGENT,
 )
@@ -43,7 +44,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
-_HISTORY_REQUEST_DELAY = 30
+# Historical traffic must respect the same minimum source cadence as live polling.
+_HISTORY_REQUEST_DELAY = MIN_SCAN_INTERVAL
 _HISTORY_RETRY_COOLDOWN = timedelta(hours=6)
 _HISTORY_MARKER_HOUR_UTC = 12
 
