@@ -279,7 +279,9 @@ class XrasHistoryBackfill:
             and self._task is None
             and monotonic() >= self._retry_after
         ):
-            self._task = self.hass.async_create_task(self._async_backfill(current_month))
+            self._task = self.hass.async_create_task(
+                self._async_backfill(current_month)
+            )
 
     @callback
     def _sync_current_month(self, rows: Iterable[dict[str, Any]]) -> None:
@@ -386,7 +388,9 @@ class XrasHistoryBackfill:
                 except HistoryFetchError as err:
                     self.status = "retry_wait"
                     self.last_error = str(err)
-                    self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+                    self._retry_after = (
+                        monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+                    )
                     _LOGGER.debug(
                         "XRAS historical backfill for %s paused for %s after: %s",
                         self.code,
