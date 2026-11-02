@@ -14,6 +14,7 @@ from custom_components.xras_geomagnetic.const import (
     CONF_CODE,
     CONF_HISTORY_MONTHS,
     DOMAIN,
+    MIN_SCAN_INTERVAL,
 )
 from custom_components.xras_geomagnetic.history import (
     _HISTORY_REQUEST_DELAY,
@@ -82,6 +83,10 @@ def _txt_month(day: str = "2026-10-05", value: str = "5.33") -> str:
 
 def test_history_statistic_id_is_external_and_region_specific() -> None:
     assert history_statistic_id("RAL5") == "xras_geomagnetic:kp_daily_max_ral5"
+
+
+def test_history_archive_requests_respect_minimum_source_cadence() -> None:
+    assert _HISTORY_REQUEST_DELAY >= MIN_SCAN_INTERVAL
 
 
 def test_daily_statistics_are_sorted_and_use_neutral_noon_marker() -> None:
