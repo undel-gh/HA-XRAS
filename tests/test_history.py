@@ -203,9 +203,11 @@ def test_current_month_recorder_failure_is_isolated(hass) -> None:
     with patch(
         "custom_components.xras_geomagnetic.history.async_add_external_statistics",
         side_effect=RuntimeError("recorder unavailable"),
-    ):
+    ) as add_stats:
+        manager._handle_update()
         manager._handle_update()
 
+    assert add_stats.call_count == 1
     assert manager.status == "retry_wait"
     assert manager.last_error == "recorder unavailable"
     assert manager.diagnostics["retry_in_seconds"] > 0
