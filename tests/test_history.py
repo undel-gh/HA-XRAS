@@ -195,6 +195,23 @@ async def test_current_month_statistics_are_not_requeued_when_unchanged(hass) ->
     assert add_stats.call_count == 2
 
 
+def test_current_month_recorder_failure_is_isolated(hass) -> None:
+    coordinator = _coordinator()
+    coordinator.data = {"daily": [{"date": date(2026, 11, 1), "kp": 4.33}]}
+    manager = XrasHistoryBackfill(hass, _entry(), coordinator)
+
+    with patch(
+        "custom_components.xras_geomagnetic.history.async_add_external_statistics",
+        side_effect=RuntimeError("recorder unavailable"),
+    ):
+        manager._handle_update()
+
+    assert manager.status == "retry_wait"
+    assert manager.last_error == "recorder unavailable"
+    assert manager.diagnostics["retry_in_seconds"] > 0
+    assert manager._task is None
+
+
 @pytest.mark.asyncio
 async def test_completed_month_requires_final_calendar_day(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(), _coordinator())
