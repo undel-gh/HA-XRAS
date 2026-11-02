@@ -266,7 +266,14 @@ class XrasHistoryBackfill:
         if self._shutdown or not self.coordinator.last_update_success:
             return
         data = self.coordinator.data or {}
-        self._sync_current_month(data.get("daily", []))
+        try:
+            self._sync_current_month(data.get("daily", []))
+        except Exception as err:  # Optional history must not affect live entities.
+            self.status = "retry_wait"
+            self.last_error = str(err)
+            self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+            _LOGGER.exception("XRAS current-month history sync failed")
+            return
 
         current_month = (
             datetime.now(timezone.utc)
