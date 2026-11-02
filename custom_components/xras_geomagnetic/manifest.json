@@ -1,6 +1,9 @@
 {
   "domain": "xras_geomagnetic",
   "name": "XRAS Geomagnetic",
+  "after_dependencies": [
+    "recorder"
+  ],
   "codeowners": [
     "@undel-gh"
   ],
