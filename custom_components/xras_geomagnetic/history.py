@@ -265,6 +265,9 @@ class XrasHistoryBackfill:
         """Sync current month cheaply and schedule bounded archive work."""
         if self._shutdown or not self.coordinator.last_update_success:
             return
+        if monotonic() < self._retry_after:
+            return
+
         data = self.coordinator.data or {}
         try:
             self._sync_current_month(data.get("daily", []))
@@ -283,11 +286,7 @@ class XrasHistoryBackfill:
         )
         if self._completed_for_month != current_month:
             self._completed_for_month = None
-        if (
-            self._completed_for_month is None
-            and self._task is None
-            and monotonic() >= self._retry_after
-        ):
+        if self._completed_for_month is None and self._task is None:
             self._task = self.hass.async_create_task(
                 self._async_backfill(current_month)
             )
