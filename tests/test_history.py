@@ -191,6 +191,42 @@ async def test_current_month_statistics_are_not_requeued_when_unchanged(hass) ->
 
 
 @pytest.mark.asyncio
+async def test_completed_month_requires_final_calendar_day(hass) -> None:
+    manager = XrasHistoryBackfill(hass, _entry(), _coordinator())
+    recorder = SimpleNamespace(
+        async_add_executor_job=AsyncMock(
+            return_value={
+                manager.statistic_id: [
+                    {
+                        "start": datetime(
+                            2026, 9, 15, 12, tzinfo=timezone.utc
+                        ).timestamp(),
+                        "max": 4.33,
+                    },
+                    {
+                        "start": datetime(
+                            2026, 10, 31, 12, tzinfo=timezone.utc
+                        ).timestamp(),
+                        "max": 5.33,
+                    },
+                ]
+            }
+        )
+    )
+
+    with patch(
+        "custom_components.xras_geomagnetic.history.get_instance",
+        return_value=recorder,
+    ):
+        completed = await manager._async_completed_months(
+            [date(2026, 10, 1), date(2026, 9, 1)],
+            date(2026, 11, 1),
+        )
+
+    assert completed == {date(2026, 10, 1)}
+
+
+@pytest.mark.asyncio
 async def test_backfill_is_sequential_and_completes(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(months=2), _coordinator())
     fetch = AsyncMock(
@@ -201,7 +237,7 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
     )
 
     with patch.object(
-        manager, "_async_existing_months", new=AsyncMock(return_value=set())
+        manager, "_async_completed_months", new=AsyncMock(return_value=set())
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
@@ -224,13 +260,13 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_existing_archive_month_is_not_downloaded_again(hass) -> None:
+async def test_completed_archive_month_is_not_downloaded_again(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(months=2), _coordinator())
     fetch = AsyncMock(return_value=_dataset(date(2026, 9, 1)))
 
     with patch.object(
         manager,
-        "_async_existing_months",
+        "_async_completed_months",
         new=AsyncMock(return_value={date(2026, 10, 1)}),
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
@@ -252,7 +288,7 @@ async def test_source_outage_pauses_backfill_without_retry_burst(hass) -> None:
     fetch = AsyncMock(side_effect=HistoryFetchError("source unavailable"))
 
     with patch.object(
-        manager, "_async_existing_months", new=AsyncMock(return_value=set())
+        manager, "_async_completed_months", new=AsyncMock(return_value=set())
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
@@ -276,7 +312,7 @@ async def test_absent_archive_is_skipped_and_next_month_continues(hass) -> None:
     )
 
     with patch.object(
-        manager, "_async_existing_months", new=AsyncMock(return_value=set())
+        manager, "_async_completed_months", new=AsyncMock(return_value=set())
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
