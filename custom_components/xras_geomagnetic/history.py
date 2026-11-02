@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from calendar import monthrange
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
 from time import monotonic
@@ -117,6 +118,11 @@ def _previous_months(current_month: date, count: int) -> list[date]:
         cursor = (cursor - timedelta(days=1)).replace(day=1)
         months.append(cursor)
     return months
+
+
+def _last_day(month: date) -> date:
+    """Return the last calendar day of month."""
+    return month.replace(day=monthrange(month.year, month.month)[1])
 
 
 def _validate_archive_month(dataset: Dataset, month: date) -> Dataset:
@@ -303,10 +309,17 @@ class XrasHistoryBackfill:
         )
         self._last_current_signature = normalized
 
-    async def _async_existing_months(
+    async def _async_completed_months(
         self, desired_months: list[date], current_month: date
     ) -> set[date]:
-        """Read already imported archive months from Recorder in one query."""
+        """Find months with a statistic for their final calendar day.
+
+        The live current-month kpm file is also imported into this statistic. A
+        month with only some earlier rows must therefore remain eligible for an
+        archive fetch after rollover; presence of the last day proves that the
+        whole live-month snapshot reached Recorder or that the archive was
+        imported previously.
+        """
         if not desired_months:
             return set()
         start = datetime(
@@ -331,14 +344,17 @@ class XrasHistoryBackfill:
             None,
             {"max"},
         )
-        months: set[date] = set()
+        existing_days: set[date] = set()
         for row in result.get(self.statistic_id, []):
             start_ts = row.get("start")
             if start_ts is None:
                 continue
-            row_date = datetime.fromtimestamp(float(start_ts), timezone.utc).date()
-            months.add(row_date.replace(day=1))
-        return months
+            existing_days.add(
+                datetime.fromtimestamp(float(start_ts), timezone.utc).date()
+            )
+        return {
+            month for month in desired_months if _last_day(month) in existing_days
+        }
 
     async def _async_backfill(self, current_month: date) -> None:
         """Backfill requested completed months at a deliberately slow pace."""
@@ -346,11 +362,11 @@ class XrasHistoryBackfill:
         self.last_error = None
         try:
             desired = _previous_months(current_month, self.months)
-            existing = await self._async_existing_months(desired, current_month)
+            completed = await self._async_completed_months(desired, current_month)
             missing = [
                 month
                 for month in desired
-                if month not in existing and month not in self._not_found_months
+                if month not in completed and month not in self._not_found_months
             ]
 
             for index, month in enumerate(missing):
@@ -379,21 +395,16 @@ class XrasHistoryBackfill:
                     )
                     return
                 else:
-                    stats = daily_statistics(dataset.daily)
-                    if not stats:
-                        raise HistoryFetchError(
-                            f"archive for {month:%Y-%m} contains no usable daily maxima"
-                        )
                     async_add_external_statistics(
                         self.hass,
                         _statistics_metadata(self.code),
-                        stats,
+                        daily_statistics(dataset.daily),
                     )
-                    existing.add(month)
+                    completed.add(month)
                     self.imported_archive_months += 1
                     _LOGGER.debug(
                         "Queued %d XRAS historical daily maxima for %s %s",
-                        len(stats),
+                        len(dataset.daily),
                         self.code,
                         month.strftime("%Y-%m"),
                     )
