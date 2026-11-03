@@ -241,7 +241,9 @@ class XrasHistoryBackfill:
         self._pending_current_signature: tuple[tuple[float, float], ...] | None = None
         self._completed_for_month: date | None = None
         self._not_found_months: set[date] = set()
+        self._archive_imported_months: set[date] = set()
         self._retry_after = 0.0
+        self._retry_generation = 0
         self._task: asyncio.Task[None] | None = None
         self._current_task: asyncio.Task[None] | None = None
         self._unsub: Any = None
@@ -316,6 +318,7 @@ class XrasHistoryBackfill:
             self.status = "retry_wait"
             self.last_error = str(err)
             self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+            self._retry_generation += 1
             _LOGGER.exception("XRAS current-month history sync failed")
             return
 
@@ -368,6 +371,7 @@ class XrasHistoryBackfill:
         stats: list[StatisticData],
     ) -> None:
         """Persist and verify current-month statistics before marking them synced."""
+        retry_generation = self._retry_generation
         try:
             await self._async_add_and_verify(stats)
         except asyncio.CancelledError:
@@ -378,20 +382,26 @@ class XrasHistoryBackfill:
             self.status = "retry_wait"
             self.last_error = str(err)
             self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+            self._retry_generation += 1
             _LOGGER.exception("XRAS current-month history persistence failed")
         else:
             if self._pending_current_signature == signature:
                 self._last_current_signature = signature
                 self._pending_current_signature = None
-                self.last_error = None
-                self._retry_after = 0.0
-                if self.status == "retry_wait":
-                    if self._completed_for_month is None:
-                        self.status = "idle"
-                    else:
-                        self.status = (
-                            "partial" if self._not_found_months else "complete"
-                        )
+                # A successful current write may clear only retry state that
+                # already existed when this task started. If another task
+                # registered a newer failure while Recorder I/O was in flight,
+                # preserve that newer error and cooldown.
+                if self._retry_generation == retry_generation:
+                    self.last_error = None
+                    self._retry_after = 0.0
+                    if self.status == "retry_wait":
+                        if self._completed_for_month is None:
+                            self.status = "idle"
+                        else:
+                            self.status = (
+                                "partial" if self._not_found_months else "complete"
+                            )
 
     async def _async_add_and_verify(self, stats: list[StatisticData]) -> None:
         """Queue statistics, wait for Recorder, and verify the persisted rows."""
@@ -496,7 +506,7 @@ class XrasHistoryBackfill:
         try:
             desired = _previous_months(current_month, self.months)
             completed = await self._async_completed_months(desired, current_month)
-            if desired:
+            if desired and desired[0] not in self._archive_imported_months:
                 # Always refresh the newest completed month from the immutable
                 # archive once per manager lifecycle/current-month rollover. A
                 # live kpm_* value for its final day may have been captured just
@@ -528,6 +538,7 @@ class XrasHistoryBackfill:
                     self._retry_after = (
                         monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
                     )
+                    self._retry_generation += 1
                     _LOGGER.debug(
                         "XRAS historical backfill for %s paused for %s after: %s",
                         self.code,
@@ -546,6 +557,7 @@ class XrasHistoryBackfill:
                         self._retry_after = (
                             monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
                         )
+                        self._retry_generation += 1
                         _LOGGER.exception(
                             "XRAS historical statistics persistence failed for %s %s",
                             self.code,
@@ -553,6 +565,7 @@ class XrasHistoryBackfill:
                         )
                         return
                     completed.add(month)
+                    self._archive_imported_months.add(month)
                     self.imported_archive_months += 1
                     _LOGGER.debug(
                         "Persisted %d XRAS historical daily maxima for %s %s",
@@ -565,11 +578,15 @@ class XrasHistoryBackfill:
                     await asyncio.sleep(_HISTORY_REQUEST_DELAY)
 
             self._completed_for_month = current_month
-            self.status = "partial" if self._not_found_months else "complete"
+            if monotonic() < self._retry_after:
+                self.status = "retry_wait"
+            else:
+                self.status = "partial" if self._not_found_months else "complete"
         except asyncio.CancelledError:
             raise
         except Exception as err:  # Optional history must not break the integration.
             self.status = "error"
             self.last_error = str(err)
             self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+            self._retry_generation += 1
             _LOGGER.exception("Unexpected XRAS historical backfill failure")
