@@ -383,6 +383,15 @@ class XrasHistoryBackfill:
             if self._pending_current_signature == signature:
                 self._last_current_signature = signature
                 self._pending_current_signature = None
+                self.last_error = None
+                self._retry_after = 0.0
+                if self.status == "retry_wait":
+                    if self._completed_for_month is None:
+                        self.status = "idle"
+                    else:
+                        self.status = (
+                            "partial" if self._not_found_months else "complete"
+                        )
 
     async def _async_add_and_verify(self, stats: list[StatisticData]) -> None:
         """Queue statistics, wait for Recorder, and verify the persisted rows."""
@@ -433,11 +442,11 @@ class XrasHistoryBackfill:
     ) -> set[date]:
         """Find months with a statistic for their final source calendar day.
 
-        The live current-month kpm file is also imported into this statistic. A
-        month with only some earlier rows must therefore remain eligible for an
-        archive fetch after rollover; presence of the last day proves that the
-        whole live-month snapshot reached Recorder or that the archive was
-        imported previously.
+        This is a fast completeness probe for older history. The freshest
+        completed month is still revalidated from its archive by
+        ``_async_backfill`` because a live ``kpm_*`` snapshot taken immediately
+        before rollover can contain the final day but miss its last three-hour
+        contribution.
         """
         if not desired_months:
             return set()
@@ -487,6 +496,12 @@ class XrasHistoryBackfill:
         try:
             desired = _previous_months(current_month, self.months)
             completed = await self._async_completed_months(desired, current_month)
+            if desired:
+                # Always refresh the newest completed month from the immutable
+                # archive once per manager lifecycle/current-month rollover. A
+                # live kpm_* value for its final day may have been captured just
+                # before XRAS switched files and therefore be slightly stale.
+                completed.discard(desired[0])
             missing = [
                 month
                 for month in desired
