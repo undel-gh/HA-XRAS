@@ -1,16 +1,64 @@
-"""Tests for config-entry migration."""
+"""Tests for config-entry setup and migration."""
 
 from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.xras_geomagnetic import async_migrate_entry
+from custom_components.xras_geomagnetic import async_migrate_entry, async_setup_entry
 from custom_components.xras_geomagnetic.const import (
     CONF_CODE,
+    CONF_HISTORY_MONTHS,
     CONF_SCAN_INTERVAL,
     DOMAIN,
 )
+from custom_components.xras_geomagnetic.history import XrasHistoryBackfill
+
+
+@pytest.mark.usefixtures("recorder_mock")
+@pytest.mark.asyncio
+async def test_setup_entry_wires_history_lifecycle(hass) -> None:
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="XRAS — RAL5",
+        unique_id="RAL5",
+        version=3,
+        data={CONF_CODE: "RAL5", CONF_SCAN_INTERVAL: 600},
+        options={CONF_HISTORY_MONTHS: 1},
+    )
+    entry.add_to_hass(hass)
+
+    with patch(
+        "custom_components.xras_geomagnetic.XrasCoordinator."
+        "async_config_entry_first_refresh",
+        new=AsyncMock(),
+    ), patch.object(
+        XrasHistoryBackfill,
+        "_handle_update",
+        autospec=True,
+    ) as handle_update, patch.object(
+        hass.config_entries,
+        "async_forward_entry_setups",
+        new=AsyncMock(),
+    ) as forward_setups:
+        assert await async_setup_entry(hass, entry)
+
+        coordinator = entry.runtime_data
+        history = coordinator.history
+        assert isinstance(history, XrasHistoryBackfill)
+        assert history.status == "idle"
+        assert history._unsub is not None
+        handle_update.assert_called_once_with(history)
+        forward_setups.assert_awaited_once()
+
+        await entry._async_process_on_unload(hass)
+
+    assert history._shutdown is True
+    assert history._unsub is None
+    assert history._task is None
+    assert history._current_task is None
 
 
 @pytest.mark.asyncio
