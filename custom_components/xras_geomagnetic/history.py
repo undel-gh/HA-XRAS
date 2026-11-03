@@ -8,6 +8,7 @@ import logging
 from calendar import monthrange
 from collections.abc import Iterable
 from datetime import date, datetime, timedelta, timezone
+from math import isclose
 from time import monotonic
 from typing import TYPE_CHECKING, Any, cast
 
@@ -24,7 +25,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 try:
     from homeassistant.components.recorder.models import StatisticMeanType
-except ImportError:  # Home Assistant 2024.12 compatibility
+except ImportError:  # Compatibility with HA releases before StatisticMeanType.
     StatisticMeanType = None  # type: ignore[assignment,misc]
 
 from .const import (
@@ -47,7 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 # Historical traffic must respect the same minimum source cadence as live polling.
 _HISTORY_REQUEST_DELAY = MIN_SCAN_INTERVAL
 _HISTORY_RETRY_COOLDOWN = timedelta(hours=6)
-_HISTORY_MARKER_HOUR_UTC = 12
+_HISTORY_MARKER_HOUR_LOCAL = 12
 
 
 class HistoryArchiveNotFound(Exception):
@@ -80,13 +81,32 @@ def _statistics_metadata(code: str) -> StatisticMetaData:
     return cast(StatisticMetaData, metadata)
 
 
-def daily_statistics(rows: Iterable[dict[str, Any]]) -> list[StatisticData]:
+def _history_day_marker(day: date, source_tz: timezone) -> datetime:
+    """Return a stable source-local noon marker for one XRAS calendar day."""
+    return datetime(
+        day.year,
+        day.month,
+        day.day,
+        _HISTORY_MARKER_HOUR_LOCAL,
+        tzinfo=source_tz,
+    )
+
+
+def daily_statistics(
+    rows: Iterable[dict[str, Any]],
+    source_tz: timezone,
+    *,
+    now: datetime | None = None,
+) -> list[StatisticData]:
     """Convert source-day maxima into one neutral hourly statistic per day.
 
     XRAS archives contain one maximum per source calendar day, not the original
     3-hour Kp samples. We therefore keep a separate external statistic and use
-    12:00 UTC as a stable marker for the source date instead of pretending that
-    the maximum was measured at a particular 3-hour slot.
+    noon in the source timezone as a stable marker for that source date instead
+    of pretending that the maximum was measured at a particular 3-hour slot.
+
+    For the live current-month dataset, callers may pass ``now`` to avoid
+    creating a statistic whose source-local noon marker is still in the future.
     """
     statistics: list[StatisticData] = []
     for row in sorted(rows, key=lambda item: item["date"]):
@@ -94,16 +114,13 @@ def daily_statistics(rows: Iterable[dict[str, Any]]) -> list[StatisticData]:
         kp = row.get("kp")
         if not isinstance(day, date) or kp is None:
             continue
+        marker = _history_day_marker(day, source_tz)
+        if now is not None and marker > now:
+            continue
         value = float(kp)
         statistics.append(
             {
-                "start": datetime(
-                    day.year,
-                    day.month,
-                    day.day,
-                    _HISTORY_MARKER_HOUR_UTC,
-                    tzinfo=timezone.utc,
-                ),
+                "start": marker,
                 "mean": value,
                 "min": value,
                 "max": value,
@@ -213,11 +230,13 @@ class XrasHistoryBackfill:
         self.status = "disabled" if self.months <= 0 else "idle"
         self.last_error: str | None = None
         self.imported_archive_months = 0
-        self._last_current_signature: tuple[tuple[date, float], ...] | None = None
+        self._last_current_signature: tuple[tuple[float, float], ...] | None = None
+        self._pending_current_signature: tuple[tuple[float, float], ...] | None = None
         self._completed_for_month: date | None = None
         self._not_found_months: set[date] = set()
         self._retry_after = 0.0
         self._task: asyncio.Task[None] | None = None
+        self._current_task: asyncio.Task[None] | None = None
         self._unsub: Any = None
         self._shutdown = False
 
@@ -256,6 +275,9 @@ class XrasHistoryBackfill:
         if self._unsub is not None:
             self._unsub()
             self._unsub = None
+        if self._current_task is not None:
+            self._current_task.cancel()
+            self._current_task = None
         if self._task is not None:
             self._task.cancel()
             self._task = None
@@ -293,23 +315,56 @@ class XrasHistoryBackfill:
 
     @callback
     def _sync_current_month(self, rows: Iterable[dict[str, Any]]) -> None:
-        """Update current-month rows without making any extra XRAS request."""
-        normalized = tuple(
-            sorted(
-                (
-                    (row["date"], float(row["kp"]))
-                    for row in rows
-                    if isinstance(row.get("date"), date) and row.get("kp") is not None
-                ),
-                key=lambda item: item[0],
-            )
-        )
-        if not normalized or normalized == self._last_current_signature:
+        """Queue current-month rows without making any extra XRAS request."""
+        if self._current_task is not None:
             return
 
         stats = daily_statistics(
-            {"date": day, "kp": kp} for day, kp in normalized
+            rows,
+            self.coordinator.tz,
+            now=datetime.now(timezone.utc),
         )
+        signature = tuple(
+            (stat["start"].timestamp(), float(stat["max"])) for stat in stats
+        )
+        if (
+            not signature
+            or signature == self._last_current_signature
+            or signature == self._pending_current_signature
+        ):
+            return
+
+        self._pending_current_signature = signature
+        self._current_task = self.hass.async_create_task(
+            self._async_store_current_statistics(signature, stats)
+        )
+
+    async def _async_store_current_statistics(
+        self,
+        signature: tuple[tuple[float, float], ...],
+        stats: list[StatisticData],
+    ) -> None:
+        """Persist and verify current-month statistics before marking them synced."""
+        try:
+            await self._async_add_and_verify(stats)
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:  # Recorder failure must not affect live entities.
+            if self._pending_current_signature == signature:
+                self._pending_current_signature = None
+            self.status = "retry_wait"
+            self.last_error = str(err)
+            self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+            _LOGGER.exception("XRAS current-month history persistence failed")
+        else:
+            if self._pending_current_signature == signature:
+                self._last_current_signature = signature
+                self._pending_current_signature = None
+        finally:
+            self._current_task = None
+
+    async def _async_add_and_verify(self, stats: list[StatisticData]) -> None:
+        """Queue statistics, wait for Recorder, and verify the persisted rows."""
         if not stats:
             return
         async_add_external_statistics(
@@ -317,12 +372,45 @@ class XrasHistoryBackfill:
             _statistics_metadata(self.code),
             stats,
         )
-        self._last_current_signature = normalized
+        if not await self._async_statistics_persisted(stats):
+            raise RuntimeError("Recorder did not persist queued XRAS statistics")
+
+    async def _async_statistics_persisted(self, stats: list[StatisticData]) -> bool:
+        """Confirm queued rows by reading them back after Recorder's commit barrier."""
+        recorder = get_instance(self.hass)
+        await recorder.async_block_till_done()
+
+        starts = [stat["start"].astimezone(timezone.utc) for stat in stats]
+        start = min(starts)
+        end = max(starts) + timedelta(hours=1)
+        result = await recorder.async_add_executor_job(
+            statistics_during_period,
+            self.hass,
+            start,
+            end,
+            {self.statistic_id},
+            "hour",
+            None,
+            {"max"},
+        )
+        persisted = {
+            float(row["start"]): row.get("max")
+            for row in result.get(self.statistic_id, [])
+            if row.get("start") is not None
+        }
+        for stat in stats:
+            expected_start = stat["start"].astimezone(timezone.utc).timestamp()
+            actual = persisted.get(expected_start)
+            if actual is None or not isclose(
+                float(actual), float(stat["max"]), rel_tol=0.0, abs_tol=1e-9
+            ):
+                return False
+        return True
 
     async def _async_completed_months(
         self, desired_months: list[date], current_month: date
     ) -> set[date]:
-        """Find months with a statistic for their final calendar day.
+        """Find months with a statistic for their final source calendar day.
 
         The live current-month kpm file is also imported into this statistic. A
         month with only some earlier rows must therefore remain eligible for an
@@ -332,17 +420,11 @@ class XrasHistoryBackfill:
         """
         if not desired_months:
             return set()
-        start = datetime(
-            desired_months[-1].year,
-            desired_months[-1].month,
-            1,
-            tzinfo=timezone.utc,
-        )
-        end = datetime(
-            current_month.year,
-            current_month.month,
-            1,
-            tzinfo=timezone.utc,
+        start = _history_day_marker(
+            desired_months[-1], self.coordinator.tz
+        ).astimezone(timezone.utc)
+        end = _history_day_marker(current_month, self.coordinator.tz).astimezone(
+            timezone.utc
         )
         result = await get_instance(self.hass).async_add_executor_job(
             statistics_during_period,
@@ -360,7 +442,9 @@ class XrasHistoryBackfill:
             if start_ts is None:
                 continue
             existing_days.add(
-                datetime.fromtimestamp(float(start_ts), timezone.utc).date()
+                datetime.fromtimestamp(float(start_ts), timezone.utc)
+                .astimezone(self.coordinator.tz)
+                .date()
             )
         return {
             month for month in desired_months if _last_day(month) in existing_days
@@ -368,6 +452,16 @@ class XrasHistoryBackfill:
 
     async def _async_backfill(self, current_month: date) -> None:
         """Backfill requested completed months at a deliberately slow pace."""
+        current_task = self._current_task
+        if current_task is not None:
+            try:
+                await current_task
+            except asyncio.CancelledError:
+                raise
+            if monotonic() < self._retry_after:
+                self._task = None
+                return
+
         self.status = "running"
         self.last_error = None
         try:
@@ -407,16 +501,26 @@ class XrasHistoryBackfill:
                     )
                     return
                 else:
-                    async_add_external_statistics(
-                        self.hass,
-                        _statistics_metadata(self.code),
-                        daily_statistics(dataset.daily),
-                    )
+                    stats = daily_statistics(dataset.daily, dataset.tz)
+                    try:
+                        await self._async_add_and_verify(stats)
+                    except Exception as err:  # Recorder errors are isolated from live data.
+                        self.status = "retry_wait"
+                        self.last_error = str(err)
+                        self._retry_after = (
+                            monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+                        )
+                        _LOGGER.exception(
+                            "XRAS historical statistics persistence failed for %s %s",
+                            self.code,
+                            month.strftime("%Y-%m"),
+                        )
+                        return
                     completed.add(month)
                     self.imported_archive_months += 1
                     _LOGGER.debug(
-                        "Queued %d XRAS historical daily maxima for %s %s",
-                        len(dataset.daily),
+                        "Persisted %d XRAS historical daily maxima for %s %s",
+                        len(stats),
                         self.code,
                         month.strftime("%Y-%m"),
                     )
