@@ -22,10 +22,11 @@
   "options": {
     "step": {
       "init": {
-        "title": "Polling settings",
-        "description": "The region is fixed for this entry. To use another region, remove this entry and add a new one.",
+        "title": "Polling and history settings",
+        "description": "The region is fixed for this entry. To use another region, remove this entry and add a new one.\n\nHistorical Kp backfill is optional: 0 disables it. Completed XRAS monthly archives are imported slowly as a separate daily-maximum statistic; current-month values reuse the already downloaded monthly file.",
         "data": {
-          "scan_interval": "Polling interval, s"
+          "scan_interval": "Polling interval, s",
+          "history_months": "History to backfill, months"
         }
       }
     }

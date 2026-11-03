@@ -20,6 +20,7 @@ async def async_get_config_entry_diagnostics(
     """Return non-sensitive diagnostics for one XRAS config entry."""
     coordinator: XrasCoordinator = entry.runtime_data
     data = coordinator.data or {}
+    history = getattr(coordinator, "history", None)
     return {
         "code": coordinator.code,
         "polling_interval_seconds": int(coordinator.update_interval.total_seconds()),
@@ -36,4 +37,5 @@ async def async_get_config_entry_diagnostics(
         "kp_current_timestamp": _iso(data.get("kp_current_ts")),
         "kp_current_valid_until": _iso(data.get("kp_current_valid_until")),
         "updated_at": _iso(data.get("updated_at")),
+        "history_backfill": history.diagnostics if history is not None else None,
     }

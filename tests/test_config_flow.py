@@ -21,6 +21,7 @@ from custom_components.xras_geomagnetic.config_flow import (
 from custom_components.xras_geomagnetic.const import (
     BASE_URL,
     CONF_CODE,
+    CONF_HISTORY_MONTHS,
     CONF_SCAN_INTERVAL,
     DOMAIN,
 )
@@ -99,7 +100,7 @@ async def test_user_flow_reports_ambiguous_region_and_preserves_input(hass) -> N
 
 
 @pytest.mark.asyncio
-async def test_options_only_expose_polling_interval(hass) -> None:
+async def test_options_expose_polling_and_history(hass) -> None:
     entry = MockConfigEntry(
         domain=DOMAIN,
         title="XRAS — RAL5",
@@ -114,13 +115,14 @@ async def test_options_only_expose_polling_interval(hass) -> None:
     defaults = result["data_schema"]({})
 
     assert result["type"] is FlowResultType.FORM
-    assert defaults == {CONF_SCAN_INTERVAL: 600}
+    assert defaults == {CONF_SCAN_INTERVAL: 600, CONF_HISTORY_MONTHS: 0}
 
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_SCAN_INTERVAL: 900}
+        result["flow_id"],
+        {CONF_SCAN_INTERVAL: 900, CONF_HISTORY_MONTHS: 12},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert entry.options == {CONF_SCAN_INTERVAL: 900}
+    assert entry.options == {CONF_SCAN_INTERVAL: 900, CONF_HISTORY_MONTHS: 12}
 
 
 @pytest.mark.asyncio
