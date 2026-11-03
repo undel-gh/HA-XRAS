@@ -82,13 +82,19 @@ def _statistics_metadata(code: str) -> StatisticMetaData:
 
 
 def _history_day_marker(day: date, source_tz: timezone) -> datetime:
-    """Return a stable source-local noon marker for one XRAS calendar day."""
-    return datetime(
+    """Return an hourly Recorder marker near source-local noon for one day."""
+    local_noon = datetime(
         day.year,
         day.month,
         day.day,
         _HISTORY_MARKER_HOUR_LOCAL,
         tzinfo=source_tz,
+    )
+    # External statistics are hourly. Align the source-local midday marker to a
+    # whole UTC hour so half-hour/quarter-hour source offsets remain valid for
+    # Recorder while staying safely inside the same source calendar day.
+    return local_noon.astimezone(timezone.utc).replace(
+        minute=0, second=0, microsecond=0
     )
 
 
@@ -102,11 +108,12 @@ def daily_statistics(
 
     XRAS archives contain one maximum per source calendar day, not the original
     3-hour Kp samples. We therefore keep a separate external statistic and use
-    noon in the source timezone as a stable marker for that source date instead
-    of pretending that the maximum was measured at a particular 3-hour slot.
+    an hourly marker near noon in the source timezone for that source date
+    instead of pretending that the maximum was measured at a particular 3-hour
+    slot.
 
     For the live current-month dataset, callers may pass ``now`` to avoid
-    creating a statistic whose source-local noon marker is still in the future.
+    creating a statistic whose source-day marker is still in the future.
     """
     statistics: list[StatisticData] = []
     for row in sorted(rows, key=lambda item: item["date"]):
