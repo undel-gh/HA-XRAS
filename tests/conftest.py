@@ -6,6 +6,8 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations):
-    """Enable loading custom integrations in Home Assistant tests."""
-    return
+def auto_enable_custom_integrations(request: pytest.FixtureRequest):
+    """Enable custom integrations after any requested Recorder fixture."""
+    if "recorder_mock" in request.fixturenames:
+        request.getfixturevalue("recorder_mock")
+    request.getfixturevalue("enable_custom_integrations")
