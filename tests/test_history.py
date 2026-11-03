@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -230,8 +232,10 @@ async def test_current_month_statistics_are_not_requeued_when_unchanged(hass) ->
         "custom_components.xras_geomagnetic.history.async_add_external_statistics"
     ) as add_stats:
         manager._sync_current_month(rows)
-        assert manager._current_task is not None
-        await manager._current_task
+        current_task = manager._current_task
+        assert current_task is not None
+        await current_task
+        await asyncio.sleep(0)
 
         manager._sync_current_month(rows)
         assert manager._current_task is None
@@ -239,8 +243,10 @@ async def test_current_month_statistics_are_not_requeued_when_unchanged(hass) ->
         manager._sync_current_month(
             [{"date": date(2020, 1, 1), "kp": 5.0}]
         )
-        assert manager._current_task is not None
-        await manager._current_task
+        current_task = manager._current_task
+        assert current_task is not None
+        await current_task
+        await asyncio.sleep(0)
 
     assert add_stats.call_count == 2
 
@@ -262,31 +268,35 @@ async def test_current_month_recorder_failure_is_isolated(hass) -> None:
         assert archive_task is not None
         await current_task
         await archive_task
+        await asyncio.sleep(0)
 
     assert add_stats.call_count == 1
     assert manager.status == "retry_wait"
     assert manager.last_error == "recorder unavailable"
     assert manager.diagnostics["retry_in_seconds"] > 0
+    assert manager._current_task is None
     assert manager._task is None
 
 
+@pytest.mark.usefixtures("recorder_mock")
 @pytest.mark.asyncio
-async def test_real_recorder_round_trip_is_persisted_and_idempotent(
-    hass, recorder_mock
-) -> None:
+async def test_real_recorder_round_trip_is_persisted_and_idempotent(hass) -> None:
+    recorder = get_instance(hass)
     source_tz = timezone(timedelta(hours=14))
     coordinator = _coordinator(source_tz)
     manager = XrasHistoryBackfill(hass, _entry(), coordinator)
     rows = [{"date": date(2020, 1, 2), "kp": 5.33}]
 
     manager._sync_current_month(rows)
-    assert manager._current_task is not None
-    await manager._current_task
+    current_task = manager._current_task
+    assert current_task is not None
+    await current_task
+    await asyncio.sleep(0)
     assert manager._last_current_signature is not None
 
     start = datetime(2020, 1, 1, tzinfo=timezone.utc)
     end = datetime(2020, 1, 3, tzinfo=timezone.utc)
-    result = await recorder_mock.async_add_executor_job(
+    result = await recorder.async_add_executor_job(
         statistics_during_period,
         hass,
         start,
@@ -305,10 +315,12 @@ async def test_real_recorder_round_trip_is_persisted_and_idempotent(
     # A reload loses the in-memory signature, but Recorder upsert remains idempotent.
     reloaded = XrasHistoryBackfill(hass, _entry(), coordinator)
     reloaded._sync_current_month(rows)
-    assert reloaded._current_task is not None
-    await reloaded._current_task
+    current_task = reloaded._current_task
+    assert current_task is not None
+    await current_task
+    await asyncio.sleep(0)
 
-    result = await recorder_mock.async_add_executor_job(
+    result = await recorder.async_add_executor_job(
         statistics_during_period,
         hass,
         start,
