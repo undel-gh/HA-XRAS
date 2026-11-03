@@ -283,6 +283,18 @@ class XrasHistoryBackfill:
             self._task = None
 
     @callback
+    def _current_task_done(self, task: asyncio.Task[None]) -> None:
+        """Clear the tracked current-month task after it finishes."""
+        if self._current_task is task:
+            self._current_task = None
+
+    @callback
+    def _backfill_task_done(self, task: asyncio.Task[None]) -> None:
+        """Clear the tracked archive task after it finishes."""
+        if self._task is task:
+            self._task = None
+
+    @callback
     def _handle_update(self) -> None:
         """Sync current month cheaply and schedule bounded archive work."""
         if self._shutdown or not self.coordinator.last_update_success:
@@ -309,15 +321,17 @@ class XrasHistoryBackfill:
         if self._completed_for_month != current_month:
             self._completed_for_month = None
         if self._completed_for_month is None and self._task is None:
-            self._task = self.hass.async_create_task(
-                self._async_backfill(current_month)
-            )
+            task = self.hass.async_create_task(self._async_backfill(current_month))
+            self._task = task
+            task.add_done_callback(self._backfill_task_done)
 
     @callback
     def _sync_current_month(self, rows: Iterable[dict[str, Any]]) -> None:
         """Queue current-month rows without making any extra XRAS request."""
         if self._current_task is not None:
-            return
+            if not self._current_task.done():
+                return
+            self._current_task = None
 
         stats = daily_statistics(
             rows,
@@ -335,9 +349,11 @@ class XrasHistoryBackfill:
             return
 
         self._pending_current_signature = signature
-        self._current_task = self.hass.async_create_task(
+        task = self.hass.async_create_task(
             self._async_store_current_statistics(signature, stats)
         )
+        self._current_task = task
+        task.add_done_callback(self._current_task_done)
 
     async def _async_store_current_statistics(
         self,
@@ -360,8 +376,6 @@ class XrasHistoryBackfill:
             if self._pending_current_signature == signature:
                 self._last_current_signature = signature
                 self._pending_current_signature = None
-        finally:
-            self._current_task = None
 
     async def _async_add_and_verify(self, stats: list[StatisticData]) -> None:
         """Queue statistics, wait for Recorder, and verify the persisted rows."""
@@ -459,7 +473,6 @@ class XrasHistoryBackfill:
             except asyncio.CancelledError:
                 raise
             if monotonic() < self._retry_after:
-                self._task = None
                 return
 
         self.status = "running"
@@ -504,7 +517,8 @@ class XrasHistoryBackfill:
                     stats = daily_statistics(dataset.daily, dataset.tz)
                     try:
                         await self._async_add_and_verify(stats)
-                    except Exception as err:  # Recorder errors are isolated from live data.
+                    # Recorder errors are isolated from live data.
+                    except Exception as err:
                         self.status = "retry_wait"
                         self.last_error = str(err)
                         self._retry_after = (
@@ -537,5 +551,3 @@ class XrasHistoryBackfill:
             self.last_error = str(err)
             self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
             _LOGGER.exception("Unexpected XRAS historical backfill failure")
-        finally:
-            self._task = None
