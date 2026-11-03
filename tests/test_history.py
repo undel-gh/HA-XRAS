@@ -126,11 +126,27 @@ def test_source_local_noon_preserves_utc_plus_14_calendar_day() -> None:
     )
 
     marker = stats[0]["start"]
-    assert marker == datetime(2026, 11, 3, 12, tzinfo=source_tz)
-    assert marker.astimezone(timezone.utc) == datetime(
-        2026, 11, 2, 22, tzinfo=timezone.utc
+    assert marker == datetime(2026, 11, 2, 22, tzinfo=timezone.utc)
+    assert marker.astimezone(source_tz) == datetime(
+        2026, 11, 3, 12, tzinfo=source_tz
     )
     assert marker.astimezone(source_tz).date() == date(2026, 11, 3)
+
+
+def test_subhour_offset_marker_is_hour_aligned_and_keeps_source_day() -> None:
+    source_tz = timezone(timedelta(hours=5, minutes=30))
+    stats = daily_statistics(
+        [{"date": date(2026, 11, 3), "kp": 4.33}],
+        source_tz,
+    )
+
+    marker = stats[0]["start"]
+    assert marker == datetime(2026, 11, 3, 6, tzinfo=timezone.utc)
+    assert marker.minute == 0
+    assert marker.second == 0
+    assert marker.astimezone(source_tz).date() == date(2026, 11, 3)
+    assert marker.astimezone(source_tz).time().hour == 11
+    assert marker.astimezone(source_tz).time().minute == 30
 
 
 def test_current_day_marker_is_not_emitted_before_source_local_noon() -> None:
