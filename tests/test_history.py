@@ -194,6 +194,17 @@ def test_statistics_metadata_matches_home_assistant_generation() -> None:
         assert metadata["unit_class"] is None
 
 
+def test_start_without_recorder_reports_unavailable(hass) -> None:
+    manager = XrasHistoryBackfill(hass, _entry(), _coordinator())
+
+    manager.start()
+
+    assert manager.status == "recorder_unavailable"
+    assert manager._unsub is None
+    assert manager._task is None
+    assert manager._current_task is None
+
+
 @pytest.mark.asyncio
 async def test_fetch_history_month_json(hass, aioclient_mock) -> None:
     url = f"{BASE_URL}/kpm_RAL5_202610.json"
@@ -291,6 +302,45 @@ async def test_current_month_recorder_failure_is_isolated(hass) -> None:
     assert manager.last_error == "recorder unavailable"
     assert manager.diagnostics["retry_in_seconds"] > 0
     assert manager._current_task is None
+    assert manager._task is None
+
+
+@pytest.mark.asyncio
+async def test_successful_current_retry_clears_stale_error_without_archive_run(hass) -> None:
+    coordinator = _coordinator()
+    coordinator.data = {"daily": [{"date": date(2020, 1, 1), "kp": 4.33}]}
+    manager = XrasHistoryBackfill(hass, _entry(), coordinator)
+    current_month = (
+        datetime.now(timezone.utc)
+        .astimezone(coordinator.tz)
+        .date()
+        .replace(day=1)
+    )
+    manager._completed_for_month = current_month
+
+    store = AsyncMock(side_effect=[RuntimeError("recorder unavailable"), None])
+    with patch.object(manager, "_async_add_and_verify", new=store):
+        manager._handle_update()
+        current_task = manager._current_task
+        assert current_task is not None
+        await current_task
+        await asyncio.sleep(0)
+
+        assert manager.status == "retry_wait"
+        assert manager.last_error == "recorder unavailable"
+        assert manager._task is None
+
+        manager._retry_after = 0.0
+        manager._handle_update()
+        current_task = manager._current_task
+        assert current_task is not None
+        await current_task
+        await asyncio.sleep(0)
+
+    assert store.await_count == 2
+    assert manager.status == "complete"
+    assert manager.last_error is None
+    assert manager.diagnostics["retry_in_seconds"] == 0
     assert manager._task is None
 
 
@@ -446,26 +496,29 @@ async def test_archive_is_not_counted_before_recorder_confirmation(hass) -> None
 
 
 @pytest.mark.asyncio
-async def test_completed_archive_month_is_not_downloaded_again(hass) -> None:
+async def test_freshest_completed_month_is_revalidated_from_archive(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(months=2), _coordinator())
-    fetch = AsyncMock(return_value=_dataset(date(2026, 9, 1)))
+    fetch = AsyncMock(return_value=_dataset(date(2026, 10, 1), 5.33))
+    store = AsyncMock(return_value=None)
 
     with patch.object(
         manager,
         "_async_completed_months",
-        new=AsyncMock(return_value={date(2026, 10, 1)}),
+        new=AsyncMock(
+            return_value={date(2026, 10, 1), date(2026, 9, 1)}
+        ),
     ), patch.object(
-        manager, "_async_add_and_verify", new=AsyncMock(return_value=None)
+        manager, "_async_add_and_verify", new=store
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
-    ), patch(
-        "custom_components.xras_geomagnetic.history.asyncio.sleep",
-        new=AsyncMock(),
     ):
         await manager._async_backfill(date(2026, 11, 1))
 
-    fetch.assert_awaited_once_with(hass, "RAL5", date(2026, 9, 1))
+    fetch.assert_awaited_once_with(hass, "RAL5", date(2026, 10, 1))
+    store.assert_awaited_once()
+    assert manager.imported_archive_months == 1
+    assert manager.status == "complete"
 
 
 @pytest.mark.asyncio
