@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from homeassistant.components.recorder.statistics import statistics_during_period
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.xras_geomagnetic.const import (
@@ -42,10 +43,10 @@ def _entry(months: int = 2) -> MockConfigEntry:
     )
 
 
-def _coordinator() -> SimpleNamespace:
+def _coordinator(source_tz: timezone = timezone.utc) -> SimpleNamespace:
     return SimpleNamespace(
         code="RAL5",
-        tz=timezone.utc,
+        tz=source_tz,
         data={},
         last_update_success=True,
     )
@@ -89,13 +90,14 @@ def test_history_archive_requests_respect_minimum_source_cadence() -> None:
     assert _HISTORY_REQUEST_DELAY >= MIN_SCAN_INTERVAL
 
 
-def test_daily_statistics_are_sorted_and_use_neutral_noon_marker() -> None:
+def test_daily_statistics_are_sorted_and_use_source_local_noon() -> None:
     stats = daily_statistics(
         [
             {"date": date(2026, 10, 5), "kp": 5.33},
             {"date": date(2026, 10, 4), "kp": 3.67},
             {"date": date(2026, 10, 6), "kp": None},
-        ]
+        ],
+        timezone.utc,
     )
 
     assert stats == [
@@ -112,6 +114,43 @@ def test_daily_statistics_are_sorted_and_use_neutral_noon_marker() -> None:
             "max": 5.33,
         },
     ]
+
+
+def test_source_local_noon_preserves_utc_plus_14_calendar_day() -> None:
+    source_tz = timezone(timedelta(hours=14))
+    stats = daily_statistics(
+        [{"date": date(2026, 11, 3), "kp": 4.33}],
+        source_tz,
+    )
+
+    marker = stats[0]["start"]
+    assert marker == datetime(2026, 11, 3, 12, tzinfo=source_tz)
+    assert marker.astimezone(timezone.utc) == datetime(
+        2026, 11, 2, 22, tzinfo=timezone.utc
+    )
+    assert marker.astimezone(source_tz).date() == date(2026, 11, 3)
+
+
+def test_current_day_marker_is_not_emitted_before_source_local_noon() -> None:
+    source_tz = timezone(timedelta(hours=3))
+    rows = [
+        {"date": date(2026, 11, 2), "kp": 3.67},
+        {"date": date(2026, 11, 3), "kp": 4.33},
+    ]
+
+    before_noon = daily_statistics(
+        rows,
+        source_tz,
+        now=datetime(2026, 11, 3, 8, 59, tzinfo=timezone.utc),
+    )
+    at_noon = daily_statistics(
+        rows,
+        source_tz,
+        now=datetime(2026, 11, 3, 9, 0, tzinfo=timezone.utc),
+    )
+
+    assert [stat["max"] for stat in before_noon] == [3.67]
+    assert [stat["max"] for stat in at_noon] == [3.67, 4.33]
 
 
 def test_previous_months_are_completed_months_newest_first() -> None:
@@ -181,23 +220,35 @@ async def test_fetch_history_month_rejects_wrong_month(hass, aioclient_mock) -> 
 @pytest.mark.asyncio
 async def test_current_month_statistics_are_not_requeued_when_unchanged(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(), _coordinator())
-    rows = [{"date": date(2026, 11, 1), "kp": 4.33}]
+    rows = [{"date": date(2020, 1, 1), "kp": 4.33}]
 
-    with patch(
+    with patch.object(
+        manager,
+        "_async_statistics_persisted",
+        new=AsyncMock(return_value=True),
+    ), patch(
         "custom_components.xras_geomagnetic.history.async_add_external_statistics"
     ) as add_stats:
         manager._sync_current_month(rows)
+        assert manager._current_task is not None
+        await manager._current_task
+
         manager._sync_current_month(rows)
+        assert manager._current_task is None
+
         manager._sync_current_month(
-            [{"date": date(2026, 11, 1), "kp": 5.0}]
+            [{"date": date(2020, 1, 1), "kp": 5.0}]
         )
+        assert manager._current_task is not None
+        await manager._current_task
 
     assert add_stats.call_count == 2
 
 
-def test_current_month_recorder_failure_is_isolated(hass) -> None:
+@pytest.mark.asyncio
+async def test_current_month_recorder_failure_is_isolated(hass) -> None:
     coordinator = _coordinator()
-    coordinator.data = {"daily": [{"date": date(2026, 11, 1), "kp": 4.33}]}
+    coordinator.data = {"daily": [{"date": date(2020, 1, 1), "kp": 4.33}]}
     manager = XrasHistoryBackfill(hass, _entry(), coordinator)
 
     with patch(
@@ -205,7 +256,12 @@ def test_current_month_recorder_failure_is_isolated(hass) -> None:
         side_effect=RuntimeError("recorder unavailable"),
     ) as add_stats:
         manager._handle_update()
-        manager._handle_update()
+        current_task = manager._current_task
+        archive_task = manager._task
+        assert current_task is not None
+        assert archive_task is not None
+        await current_task
+        await archive_task
 
     assert add_stats.call_count == 1
     assert manager.status == "retry_wait"
@@ -215,21 +271,74 @@ def test_current_month_recorder_failure_is_isolated(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_completed_month_requires_final_calendar_day(hass) -> None:
-    manager = XrasHistoryBackfill(hass, _entry(), _coordinator())
+async def test_real_recorder_round_trip_is_persisted_and_idempotent(
+    hass, recorder_mock
+) -> None:
+    source_tz = timezone(timedelta(hours=14))
+    coordinator = _coordinator(source_tz)
+    manager = XrasHistoryBackfill(hass, _entry(), coordinator)
+    rows = [{"date": date(2020, 1, 2), "kp": 5.33}]
+
+    manager._sync_current_month(rows)
+    assert manager._current_task is not None
+    await manager._current_task
+    assert manager._last_current_signature is not None
+
+    start = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2020, 1, 3, tzinfo=timezone.utc)
+    result = await recorder_mock.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        {manager.statistic_id},
+        "hour",
+        None,
+        {"max"},
+    )
+    assert len(result[manager.statistic_id]) == 1
+    assert result[manager.statistic_id][0]["max"] == 5.33
+    assert datetime.fromtimestamp(
+        result[manager.statistic_id][0]["start"], timezone.utc
+    ).astimezone(source_tz).date() == date(2020, 1, 2)
+
+    # A reload loses the in-memory signature, but Recorder upsert remains idempotent.
+    reloaded = XrasHistoryBackfill(hass, _entry(), coordinator)
+    reloaded._sync_current_month(rows)
+    assert reloaded._current_task is not None
+    await reloaded._current_task
+
+    result = await recorder_mock.async_add_executor_job(
+        statistics_during_period,
+        hass,
+        start,
+        end,
+        {manager.statistic_id},
+        "hour",
+        None,
+        {"max"},
+    )
+    assert len(result[manager.statistic_id]) == 1
+    assert result[manager.statistic_id][0]["max"] == 5.33
+
+
+@pytest.mark.asyncio
+async def test_completed_month_requires_final_source_calendar_day(hass) -> None:
+    source_tz = timezone(timedelta(hours=14))
+    manager = XrasHistoryBackfill(hass, _entry(), _coordinator(source_tz))
     recorder = SimpleNamespace(
         async_add_executor_job=AsyncMock(
             return_value={
                 manager.statistic_id: [
                     {
                         "start": datetime(
-                            2026, 9, 15, 12, tzinfo=timezone.utc
+                            2026, 9, 15, 12, tzinfo=source_tz
                         ).timestamp(),
                         "max": 4.33,
                     },
                     {
                         "start": datetime(
-                            2026, 10, 31, 12, tzinfo=timezone.utc
+                            2026, 10, 31, 12, tzinfo=source_tz
                         ).timestamp(),
                         "max": 5.33,
                     },
@@ -259,15 +368,16 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
             _dataset(date(2026, 9, 1), 4.67),
         ]
     )
+    store = AsyncMock(return_value=None)
 
     with patch.object(
         manager, "_async_completed_months", new=AsyncMock(return_value=set())
+    ), patch.object(
+        manager, "_async_add_and_verify", new=store
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
     ), patch(
-        "custom_components.xras_geomagnetic.history.async_add_external_statistics"
-    ) as add_stats, patch(
         "custom_components.xras_geomagnetic.history.asyncio.sleep",
         new=AsyncMock(),
     ) as sleep:
@@ -277,10 +387,34 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
         date(2026, 10, 1),
         date(2026, 9, 1),
     ]
-    assert add_stats.call_count == 2
+    assert store.await_count == 2
     sleep.assert_awaited_once_with(_HISTORY_REQUEST_DELAY)
     assert manager.imported_archive_months == 2
     assert manager.status == "complete"
+
+
+@pytest.mark.asyncio
+async def test_archive_is_not_counted_before_recorder_confirmation(hass) -> None:
+    manager = XrasHistoryBackfill(hass, _entry(months=1), _coordinator())
+    fetch = AsyncMock(return_value=_dataset(date(2026, 10, 1), 5.33))
+
+    with patch.object(
+        manager, "_async_completed_months", new=AsyncMock(return_value=set())
+    ), patch.object(
+        manager,
+        "_async_add_and_verify",
+        new=AsyncMock(side_effect=RuntimeError("Recorder did not persist")),
+    ), patch(
+        "custom_components.xras_geomagnetic.history.async_fetch_history_month",
+        fetch,
+    ):
+        await manager._async_backfill(date(2026, 11, 1))
+
+    assert manager.imported_archive_months == 0
+    assert manager._completed_for_month is None
+    assert manager.status == "retry_wait"
+    assert manager.last_error == "Recorder did not persist"
+    assert manager.diagnostics["retry_in_seconds"] > 0
 
 
 @pytest.mark.asyncio
@@ -292,11 +426,11 @@ async def test_completed_archive_month_is_not_downloaded_again(hass) -> None:
         manager,
         "_async_completed_months",
         new=AsyncMock(return_value={date(2026, 10, 1)}),
+    ), patch.object(
+        manager, "_async_add_and_verify", new=AsyncMock(return_value=None)
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
-    ), patch(
-        "custom_components.xras_geomagnetic.history.async_add_external_statistics"
     ), patch(
         "custom_components.xras_geomagnetic.history.asyncio.sleep",
         new=AsyncMock(),
@@ -334,21 +468,22 @@ async def test_absent_archive_is_skipped_and_next_month_continues(hass) -> None:
             _dataset(date(2026, 9, 1), 4.33),
         ]
     )
+    store = AsyncMock(return_value=None)
 
     with patch.object(
         manager, "_async_completed_months", new=AsyncMock(return_value=set())
+    ), patch.object(
+        manager, "_async_add_and_verify", new=store
     ), patch(
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
     ), patch(
-        "custom_components.xras_geomagnetic.history.async_add_external_statistics"
-    ) as add_stats, patch(
         "custom_components.xras_geomagnetic.history.asyncio.sleep",
         new=AsyncMock(),
     ):
         await manager._async_backfill(date(2026, 11, 1))
 
     assert fetch.await_count == 2
-    assert add_stats.call_count == 1
+    assert store.await_count == 1
     assert manager.status == "partial"
     assert manager.diagnostics["archive_not_found"] == ["2026-10"]
