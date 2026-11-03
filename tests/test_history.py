@@ -306,7 +306,7 @@ async def test_current_month_recorder_failure_is_isolated(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_successful_current_retry_clears_stale_error_without_archive_run(hass) -> None:
+async def test_successful_current_retry_clears_stale_diagnostics(hass) -> None:
     coordinator = _coordinator()
     coordinator.data = {"daily": [{"date": date(2020, 1, 1), "kp": 4.33}]}
     manager = XrasHistoryBackfill(hass, _entry(), coordinator)
