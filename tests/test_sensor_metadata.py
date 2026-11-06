@@ -11,6 +11,7 @@ from custom_components.xras_geomagnetic.sensor import SENSORS
 def test_forecasts_and_aggregates_do_not_claim_measurement_state_class() -> None:
     descriptions = {description.key: description for description in SENSORS}
     for key in (
+        "ap",
         "kp_max_today",
         "kp_max_month",
         "storm_days_month",
@@ -26,3 +27,12 @@ def test_geomagnetic_binary_sensors_have_no_explicit_device_class() -> None:
     # integration must not override it with SAFETY or any other device class.
     assert _Base.__dict__.get("_attr_device_class") is None
     assert issubclass(_Base, Entity)
+
+
+def test_latest_solar_observations_remain_measurements() -> None:
+    """F10.7/SN are latest reported observations, not daily Ap aggregates."""
+    from homeassistant.components.sensor import SensorStateClass
+
+    descriptions = {description.key: description for description in SENSORS}
+    for key in ("f10", "sn", "kp_current"):
+        assert descriptions[key].state_class is SensorStateClass.MEASUREMENT
