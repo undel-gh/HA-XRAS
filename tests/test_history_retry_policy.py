@@ -144,7 +144,7 @@ async def test_transport_failures_never_exhaust_invalid_budget(hass) -> None:
         "custom_components.xras_geomagnetic.history.async_fetch_history_month",
         fetch,
     ):
-        for attempt in range(4):
+        for _ in range(4):
             await manager._async_backfill(current)
             assert manager.status == "retry_wait"
             assert manager.diagnostics["retry_in_seconds"] > 0
