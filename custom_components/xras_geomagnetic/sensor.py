@@ -161,7 +161,7 @@ SENSORS: tuple[XrasSensorDescription, ...] = (
     XrasSensorDescription(
         key="ap",
         icon="mdi:sine-wave",
-        state_class=SensorStateClass.MEASUREMENT,
+        # Daily Ap summarizes eight three-hour intervals; not a current reading.
         suggested_display_precision=0,
         value_fn=lambda data: data.get("ap"),
         attrs_fn=lambda data: {"forecast": data.get("ap_forecast")},
