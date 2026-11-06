@@ -670,7 +670,11 @@ class XrasHistoryBackfill:
             else:
                 self.status = (
                     "partial"
-                    if self._not_found_months or self._archive_invalid_skipped
+                    if any(
+                        month in self._not_found_months
+                        or month in self._archive_invalid_skipped
+                        for month in desired
+                    )
                     else "complete"
                 )
         except asyncio.CancelledError:
