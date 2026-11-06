@@ -468,6 +468,11 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
     assert store.await_count == 2
     sleep.assert_awaited_once_with(_HISTORY_REQUEST_DELAY)
     assert manager.imported_archive_months == 2
+    assert manager.diagnostics["imported_archive_months_this_session"] == 2
+    assert manager.diagnostics["archive_imported_months"] == [
+        "2026-09",
+        "2026-10",
+    ]
     assert manager.status == "complete"
 
 
@@ -489,6 +494,7 @@ async def test_archive_is_not_counted_before_recorder_confirmation(hass) -> None
         await manager._async_backfill(date(2026, 11, 1))
 
     assert manager.imported_archive_months == 0
+    assert manager.diagnostics["archive_imported_months"] == []
     assert manager._completed_for_month is None
     assert manager.status == "retry_wait"
     assert manager.last_error == "Recorder did not persist"
