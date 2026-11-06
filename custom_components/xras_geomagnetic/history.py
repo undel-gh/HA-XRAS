@@ -492,14 +492,14 @@ class XrasHistoryBackfill:
                 for row in result.get(self.statistic_id, [])
                 if row.get("start") is not None
             }
-            if all(
-                (actual := persisted.get(stat["start"].astimezone(timezone.utc).timestamp()))
-                is not None
-                and isclose(
+            for stat in stats:
+                expected_start = stat["start"].astimezone(timezone.utc).timestamp()
+                actual = persisted.get(expected_start)
+                if actual is None or not isclose(
                     float(actual), float(stat["max"]), rel_tol=0.0, abs_tol=1e-9
-                )
-                for stat in stats
-            ):
+                ):
+                    break
+            else:
                 return True
         return False
 
