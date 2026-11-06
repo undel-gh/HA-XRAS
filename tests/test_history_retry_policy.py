@@ -253,3 +253,37 @@ async def test_pending_fresh_404_becomes_older_month_after_rollover(hass) -> Non
     assert manager.diagnostics["fresh_archive_pending"] == "2026-11"
     assert manager.diagnostics["archive_not_found"] == ["2026-09", "2026-10"]
     assert manager.status == "retry_wait"
+
+
+@pytest.mark.asyncio
+async def test_unpublished_fresh_archive_that_becomes_invalid_exhausts_budget(
+    hass,
+) -> None:
+    """The pending 404 flag must not keep rescheduling a permanently bad month."""
+    manager = XrasHistoryBackfill(hass, _entry(months=1), _coordinator())
+    current = date(2026, 11, 1)
+    october = date(2026, 10, 1)
+    fetch = AsyncMock(
+        side_effect=[
+            HistoryArchiveNotFound("not yet published"),
+            *[HistoryArchiveInvalid("bad October") for _ in range(3)],
+        ]
+    )
+    with patch.object(
+        manager, "_async_completed_months", new=AsyncMock(return_value=set())
+    ), patch(
+        "custom_components.xras_geomagnetic.history.async_fetch_history_month",
+        fetch,
+    ):
+        await manager._async_backfill(current)
+        assert manager.diagnostics["fresh_archive_pending"] == "2026-10"
+        for _ in range(3):
+            manager._retry_after = 0.0
+            await manager._async_backfill(current)
+
+    assert fetch.await_count == 4
+    assert all(call.args[2] == october for call in fetch.await_args_list)
+    assert manager.status == "partial"
+    assert manager._completed_for_month == current
+    assert manager.diagnostics["fresh_archive_pending"] is None
+    assert manager.diagnostics["archive_invalid_skipped"] == ["2026-10"]
