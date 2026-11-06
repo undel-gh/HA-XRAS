@@ -50,6 +50,10 @@ _HISTORY_REQUEST_DELAY = MIN_SCAN_INTERVAL
 _HISTORY_RETRY_COOLDOWN = timedelta(hours=6)
 _HISTORY_INVALID_MAX_ATTEMPTS = 3
 _HISTORY_MARKER_HOUR_LOCAL = 12
+# The Recorder import queue can be empty while a worker is still writing.
+# Keep readback bounded and never requeue the same statistics within a retry.
+_RECORDER_VERIFY_ATTEMPTS = 4
+_RECORDER_VERIFY_DELAY = 0.5
 
 
 class HistoryArchiveNotFound(Exception):
@@ -457,36 +461,47 @@ class XrasHistoryBackfill:
             raise RuntimeError("Recorder did not persist queued XRAS statistics")
 
     async def _async_statistics_persisted(self, stats: list[StatisticData]) -> bool:
-        """Confirm queued rows by reading them back after Recorder's commit barrier."""
-        recorder = get_instance(self.hass)
-        await recorder.async_block_till_done()
+        """Read back committed rows, tolerating a short Recorder queue race.
 
+        The import task may already have left Recorder's queue while its worker
+        is still writing. In that window async_block_till_done() can return
+        without waiting for the in-flight import. A bounded readback retry
+        checks for the expected timestamps and values without queuing new data.
+        """
+        recorder = get_instance(self.hass)
         starts = [stat["start"].astimezone(timezone.utc) for stat in stats]
         start = min(starts)
         end = max(starts) + timedelta(hours=1)
-        result = await recorder.async_add_executor_job(
-            statistics_during_period,
-            self.hass,
-            start,
-            end,
-            {self.statistic_id},
-            "hour",
-            None,
-            {"max"},
-        )
-        persisted = {
-            float(row["start"]): row.get("max")
-            for row in result.get(self.statistic_id, [])
-            if row.get("start") is not None
-        }
-        for stat in stats:
-            expected_start = stat["start"].astimezone(timezone.utc).timestamp()
-            actual = persisted.get(expected_start)
-            if actual is None or not isclose(
-                float(actual), float(stat["max"]), rel_tol=0.0, abs_tol=1e-9
-            ):
-                return False
-        return True
+
+        for attempt in range(_RECORDER_VERIFY_ATTEMPTS):
+            if attempt:
+                await asyncio.sleep(_RECORDER_VERIFY_DELAY)
+            await recorder.async_block_till_done()
+            result = await recorder.async_add_executor_job(
+                statistics_during_period,
+                self.hass,
+                start,
+                end,
+                {self.statistic_id},
+                "hour",
+                None,
+                {"max"},
+            )
+            persisted = {
+                float(row["start"]): row.get("max")
+                for row in result.get(self.statistic_id, [])
+                if row.get("start") is not None
+            }
+            for stat in stats:
+                expected_start = stat["start"].astimezone(timezone.utc).timestamp()
+                actual = persisted.get(expected_start)
+                if actual is None or not isclose(
+                    float(actual), float(stat["max"]), rel_tol=0.0, abs_tol=1e-9
+                ):
+                    break
+            else:
+                return True
+        return False
 
     async def _async_completed_months(
         self, desired_months: list[date], current_month: date
