@@ -494,6 +494,7 @@ async def test_archive_is_not_counted_before_recorder_confirmation(hass) -> None
         await manager._async_backfill(date(2026, 11, 1))
 
     assert manager.imported_archive_months == 0
+    assert manager.diagnostics["archive_imported_months"] == []
     assert manager._completed_for_month is None
     assert manager.status == "retry_wait"
     assert manager.last_error == "Recorder did not persist"
