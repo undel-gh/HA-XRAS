@@ -603,6 +603,8 @@ class XrasHistoryBackfill:
                         )
                         return
                     self._archive_invalid_skipped.add(month)
+                    if month == self._fresh_archive_pending:
+                        self._fresh_archive_pending = None
                     _LOGGER.warning(
                         "XRAS archive %s %s invalid after %d attempts; "
                         "skipping until integration reload",
