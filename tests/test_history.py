@@ -468,6 +468,11 @@ async def test_backfill_is_sequential_and_completes(hass) -> None:
     assert store.await_count == 2
     sleep.assert_awaited_once_with(_HISTORY_REQUEST_DELAY)
     assert manager.imported_archive_months == 2
+    assert manager.diagnostics["imported_archive_months_this_session"] == 2
+    assert manager.diagnostics["archive_imported_months"] == [
+        "2026-09",
+        "2026-10",
+    ]
     assert manager.status == "complete"
 
 
