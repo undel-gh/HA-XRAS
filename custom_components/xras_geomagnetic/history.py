@@ -259,6 +259,10 @@ class XrasHistoryBackfill:
             "status": self.status,
             "last_error": self.last_error,
             "imported_archive_months_this_session": self.imported_archive_months,
+            "archive_imported_months": [
+                month.strftime("%Y-%m")
+                for month in sorted(self._archive_imported_months)
+            ],
             "archive_not_found": [
                 month.strftime("%Y-%m") for month in sorted(self._not_found_months)
             ],
