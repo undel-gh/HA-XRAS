@@ -48,6 +48,7 @@ _LOGGER = logging.getLogger(__name__)
 # Historical traffic must respect the same minimum source cadence as live polling.
 _HISTORY_REQUEST_DELAY = MIN_SCAN_INTERVAL
 _HISTORY_RETRY_COOLDOWN = timedelta(hours=6)
+_HISTORY_INVALID_MAX_ATTEMPTS = 3
 _HISTORY_MARKER_HOUR_LOCAL = 12
 
 
@@ -57,6 +58,10 @@ class HistoryArchiveNotFound(Exception):
 
 class HistoryFetchError(Exception):
     """An XRAS monthly archive could not be downloaded or parsed."""
+
+
+class HistoryArchiveInvalid(HistoryFetchError):
+    """Every reachable archive format was invalid, without transport failures."""
 
 
 def history_statistic_id(code: str) -> str:
@@ -174,7 +179,8 @@ async def async_fetch_history_month(
     session = async_get_clientsession(hass)
     headers = {"User-Agent": USER_AGENT, "Accept": "application/json, text/plain"}
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT)
-    last_error: Exception | None = None
+    transport_error: Exception | None = None
+    invalid_error: Exception | None = None
     not_found = 0
 
     for suffix in ("json", "txt"):
@@ -194,24 +200,31 @@ async def async_fetch_history_month(
                 else parse_txt(raw, code)
             )
             return _validate_archive_month(dataset, month)
+        except (aiohttp.ClientError, TimeoutError) as err:
+            transport_error = err
+            _LOGGER.debug("XRAS history transport failed for %s", url, exc_info=True)
         except (
-            aiohttp.ClientError,
-            TimeoutError,
             UnicodeDecodeError,
             XrasResponseTooLarge,
             json.JSONDecodeError,
             XrasParseError,
         ) as err:
-            last_error = err
-            _LOGGER.debug("XRAS history fetch failed for %s", url, exc_info=True)
+            invalid_error = err
+            _LOGGER.debug("XRAS history content invalid for %s", url, exc_info=True)
 
     if not_found == 2:
         raise HistoryArchiveNotFound(f"no archive for {month:%Y-%m}")
-    if last_error is None:
-        raise HistoryFetchError(f"no usable archive for {month:%Y-%m}")
-    raise HistoryFetchError(
-        f"could not fetch archive for {month:%Y-%m}: {last_error}"
-    ) from last_error
+    # An HTTP/transport failure is not evidence of malformed source data.
+    # If either format could not be fetched, retry without a per-month cap.
+    if transport_error is not None:
+        raise HistoryFetchError(
+            f"could not fetch archive for {month:%Y-%m}: {transport_error}"
+        ) from transport_error
+    if invalid_error is not None:
+        raise HistoryArchiveInvalid(
+            f"invalid archive for {month:%Y-%m}: {invalid_error}"
+        ) from invalid_error
+    raise HistoryFetchError(f"no usable archive for {month:%Y-%m}")
 
 
 class XrasHistoryBackfill:
