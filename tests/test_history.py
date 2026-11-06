@@ -547,18 +547,21 @@ async def test_source_outage_pauses_backfill_without_retry_burst(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_absent_archive_is_skipped_and_next_month_continues(hass) -> None:
+async def test_absent_older_archive_is_skipped_for_session(hass) -> None:
     manager = XrasHistoryBackfill(hass, _entry(months=2), _coordinator())
+    october = date(2026, 10, 1)
+    september = date(2026, 9, 1)
     fetch = AsyncMock(
         side_effect=[
-            HistoryArchiveNotFound("not published"),
-            _dataset(date(2026, 9, 1), 4.33),
+            _dataset(october, 4.33),
+            HistoryArchiveNotFound("old archive missing"),
         ]
     )
     store = AsyncMock(return_value=None)
 
     with patch.object(
-        manager, "_async_completed_months", new=AsyncMock(return_value=set())
+        manager, "_async_completed_months",
+        new=AsyncMock(side_effect=[set(), {october}]),
     ), patch.object(
         manager, "_async_add_and_verify", new=store
     ), patch(
@@ -569,8 +572,13 @@ async def test_absent_archive_is_skipped_and_next_month_continues(hass) -> None:
         new=AsyncMock(),
     ):
         await manager._async_backfill(date(2026, 11, 1))
+        await manager._async_backfill(date(2026, 11, 1))
 
-    assert fetch.await_count == 2
+    assert [call.args[2] for call in fetch.await_args_list] == [
+        october,
+        september,
+    ]
     assert store.await_count == 1
     assert manager.status == "partial"
-    assert manager.diagnostics["archive_not_found"] == ["2026-10"]
+    assert manager.diagnostics["archive_not_found"] == ["2026-09"]
+    assert manager.diagnostics["fresh_archive_pending"] is None
