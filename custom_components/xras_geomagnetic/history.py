@@ -596,7 +596,8 @@ class XrasHistoryBackfill:
                     if attempts < _HISTORY_INVALID_MAX_ATTEMPTS:
                         self._pause_for_retry(str(err))
                         _LOGGER.debug(
-                            "XRAS archive %s %s invalid (attempt %d/%d); retry after %s",
+                            "XRAS archive %s %s invalid (attempt %d/%d); "
+                            "retry after %s",
                             self.code,
                             month.strftime("%Y-%m"),
                             attempts,
