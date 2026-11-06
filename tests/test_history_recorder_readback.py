@@ -141,7 +141,7 @@ async def test_recorder_readback_exhaustion_fails_closed(hass) -> None:
 
 
 @pytest.mark.asyncio
-async def test_current_month_failed_readback_enters_retry_without_signature(hass) -> None:
+async def test_current_failed_readback_enters_retry(hass) -> None:
     manager = _manager(hass)
     rows = [{"date": date(2020, 1, 2), "kp": 5.33}]
     recorder = SimpleNamespace(
