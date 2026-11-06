@@ -255,6 +255,9 @@ class XrasHistoryBackfill:
         self._completed_for_month: date | None = None
         self._not_found_months: set[date] = set()
         self._archive_imported_months: set[date] = set()
+        self._archive_invalid_attempts: dict[date, int] = {}
+        self._archive_invalid_skipped: set[date] = set()
+        self._fresh_archive_pending: date | None = None
         self._retry_after = 0.0
         self._retry_generation = 0
         self._task: asyncio.Task[None] | None = None
@@ -279,8 +282,29 @@ class XrasHistoryBackfill:
             "archive_not_found": [
                 month.strftime("%Y-%m") for month in sorted(self._not_found_months)
             ],
+            "archive_invalid_attempts": {
+                month.strftime("%Y-%m"): self._archive_invalid_attempts[month]
+                for month in sorted(self._archive_invalid_attempts)
+            },
+            "archive_invalid_skipped": [
+                month.strftime("%Y-%m")
+                for month in sorted(self._archive_invalid_skipped)
+            ],
+            "fresh_archive_pending": (
+                self._fresh_archive_pending.strftime("%Y-%m")
+                if self._fresh_archive_pending is not None
+                else None
+            ),
             "retry_in_seconds": max(0, int(self._retry_after - monotonic())),
         }
+
+    @callback
+    def _pause_for_retry(self, error: str) -> None:
+        """Schedule the shared cooldown, preserving concurrent error ownership."""
+        self.status = "retry_wait"
+        self.last_error = error
+        self._retry_after = monotonic() + _HISTORY_RETRY_COOLDOWN.total_seconds()
+        self._retry_generation += 1
 
     @callback
     def start(self) -> None:
@@ -522,6 +546,11 @@ class XrasHistoryBackfill:
         self.last_error = None
         try:
             desired = _previous_months(current_month, self.months)
+            newest = desired[0] if desired else None
+            # A previous rollover's unpublished month is no longer the newest
+            # archive. It follows ordinary (session-skipped) 404 policy now.
+            if self._fresh_archive_pending != newest:
+                self._fresh_archive_pending = None
             completed = await self._async_completed_months(desired, current_month)
             if desired and desired[0] not in self._archive_imported_months:
                 # Always refresh the newest completed month from the immutable
@@ -532,7 +561,9 @@ class XrasHistoryBackfill:
             missing = [
                 month
                 for month in desired
-                if month not in completed and month not in self._not_found_months
+                if month not in completed
+                and month not in self._not_found_months
+                and month not in self._archive_invalid_skipped
             ]
 
             for index, month in enumerate(missing):
@@ -543,11 +574,41 @@ class XrasHistoryBackfill:
                         self.hass, self.code, month
                     )
                 except HistoryArchiveNotFound:
-                    self._not_found_months.add(month)
+                    if month == newest:
+                        # XRAS may publish the final month's archive after the
+                        # live kpm_* file has already rolled over. Retry this
+                        # one missing month after cooldown, but process older
+                        # archives during the current pass.
+                        self._fresh_archive_pending = month
+                        self._pause_for_retry(f"archive {month:%Y-%m} not yet published")
+                    else:
+                        self._not_found_months.add(month)
                     _LOGGER.debug(
                         "XRAS historical archive %s %s is not available",
                         self.code,
                         month.strftime("%Y-%m"),
+                    )
+                except HistoryArchiveInvalid as err:
+                    attempts = self._archive_invalid_attempts.get(month, 0) + 1
+                    self._archive_invalid_attempts[month] = attempts
+                    if attempts < _HISTORY_INVALID_MAX_ATTEMPTS:
+                        self._pause_for_retry(str(err))
+                        _LOGGER.debug(
+                            "XRAS archive %s %s invalid (attempt %d/%d); retry after %s",
+                            self.code,
+                            month.strftime("%Y-%m"),
+                            attempts,
+                            _HISTORY_INVALID_MAX_ATTEMPTS,
+                            _HISTORY_RETRY_COOLDOWN,
+                        )
+                        return
+                    self._archive_invalid_skipped.add(month)
+                    _LOGGER.warning(
+                        "XRAS archive %s %s invalid after %d attempts; "
+                        "skipping until integration reload",
+                        self.code,
+                        month.strftime("%Y-%m"),
+                        attempts,
                     )
                 except HistoryFetchError as err:
                     self.status = "retry_wait"
@@ -583,6 +644,9 @@ class XrasHistoryBackfill:
                         return
                     completed.add(month)
                     self._archive_imported_months.add(month)
+                    self._archive_invalid_attempts.pop(month, None)
+                    if month == self._fresh_archive_pending:
+                        self._fresh_archive_pending = None
                     self.imported_archive_months += 1
                     _LOGGER.debug(
                         "Persisted %d XRAS historical daily maxima for %s %s",
@@ -594,11 +658,19 @@ class XrasHistoryBackfill:
                 if index < len(missing) - 1:
                     await asyncio.sleep(_HISTORY_REQUEST_DELAY)
 
-            self._completed_for_month = current_month
+            # Do not mark this month finished while its fresh archive is
+            # unpublished: the next successful coordinator refresh after the
+            # cooldown must schedule another attempt.
+            if self._fresh_archive_pending is None:
+                self._completed_for_month = current_month
             if monotonic() < self._retry_after:
                 self.status = "retry_wait"
             else:
-                self.status = "partial" if self._not_found_months else "complete"
+                self.status = (
+                    "partial"
+                    if self._not_found_months or self._archive_invalid_skipped
+                    else "complete"
+                )
         except asyncio.CancelledError:
             raise
         except Exception as err:  # Optional history must not break the integration.
