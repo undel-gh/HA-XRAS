@@ -580,7 +580,9 @@ class XrasHistoryBackfill:
                         # one missing month after cooldown, but process older
                         # archives during the current pass.
                         self._fresh_archive_pending = month
-                        self._pause_for_retry(f"archive {month:%Y-%m} not yet published")
+                        self._pause_for_retry(
+                            f"archive {month:%Y-%m} not yet published"
+                        )
                     else:
                         self._not_found_months.add(month)
                     _LOGGER.debug(
