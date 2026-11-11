@@ -1,4 +1,4 @@
-[![Validate](https://github.com/undel-gh/HA-XRAS/actions/workflows/validate.yml/badge.svg)](https://github.com/undel-gh/HA-XRAS/actions/workflows/validate.yml)
+[![Validate](https://github.com/undel-gh/HA-XRAS/actions/workflows/main.yml/badge.svg)](https://github.com/undel-gh/HA-XRAS/actions/workflows/main.yml)
 [![HACS: Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
 ![Home Assistant Custom Integration](https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-18BCF2?style=flat-square)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
