@@ -1,6 +1,9 @@
 [![Validate](https://github.com/undel-gh/HA-Laundry-Monitor/actions/workflows/validate.yml/badge.svg)](https://github.com/undel-gh/HA-Laundry-Monitor/actions/workflows/validate.yml)
-[![HACS: Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
+[![HACS: Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
+![Home Assistant Custom Integration](https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-18BCF2?style=flat-square)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+[![Open your Home Assistant instance and open the HA-XRAS repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=undel-gh&repository=HA-XRAS&category=integration)
 
 [**English**](#xras--geomagnetic-conditions-for-home-assistant) | [**Русский**](#xras--геомагнитная-обстановка-для-home-assistant)
 
