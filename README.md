@@ -1,6 +1,7 @@
 [![Validate](https://github.com/undel-gh/HA-Laundry-Monitor/actions/workflows/validate.yml/badge.svg)](https://github.com/undel-gh/HA-Laundry-Monitor/actions/workflows/validate.yml)
 [![HACS: Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://hacs.xyz)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 [**English**](#xras--geomagnetic-conditions-for-home-assistant) | [**Русский**](#xras--геомагнитная-обстановка-для-home-assistant)
 
 # XRAS — Geomagnetic Conditions for Home Assistant
