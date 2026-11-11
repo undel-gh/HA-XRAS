@@ -4,6 +4,7 @@
   "after_dependencies": [
     "recorder"
   ],
+  "categories": ["weather_alerts"],
   "codeowners": [
     "@undel-gh"
   ],
@@ -11,7 +12,6 @@
   "documentation": "https://github.com/undel-gh/HA-XRAS",
   "integration_type": "service",
   "iot_class": "cloud_polling",
-  "categories": ["weather_alerts"],
   "issue_tracker": "https://github.com/undel-gh/HA-XRAS/issues",
   "requirements": [],
   "version": "2.5.2"
