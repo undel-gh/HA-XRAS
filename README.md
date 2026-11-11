@@ -1,3 +1,528 @@
+[**English**](#xras--geomagnetic-conditions-for-home-assistant) | [**Русский**](#xras--геомагнитная-обстановка-для-home-assistant)
+
+# XRAS — Geomagnetic Conditions for Home Assistant
+
+The integration uses data from the Laboratory of Solar Astronomy at the Space
+Research Institute of the Russian Academy of Sciences (IKI RAS)
+(<https://xras.ru>): actual and forecast Kp index values, as well as Ap, F10.7,
+and the sunspot number.
+
+## Data Sources
+
+All files are located in `https://xras.ru/txt/` and are named
+`<prefix>_<code>.json` (or `.txt`). The integration downloads four files:
+
+| Prefix | Contents | Required |
+| --- | --- | --- |
+| `kp` | Kp for three days, actual values (three-hour intervals) | yes |
+| `kpf` | Kp forecast for three days | no |
+| `kpm` | Daily maximum Kp for the current month | no |
+| `kpfl` | Daily maximum Kp for the month ahead | no |
+
+### Region Code
+
+`<code>` is either a time zone (`UP03` = UTC+03, `UM05` = UTC−05) or the code
+of a specific region. The codes are opaque and cannot be guessed:
+
+| Region | Code |
+| --- | --- |
+| Moscow | `RAL5` |
+| Riga | `RIK0` |
+| Norilsk | `NJ7D` |
+| general UTC+03 zone | `UP03` |
+
+**You do not have to enter the code manually.** During setup, the integration
+loads the official XRAS region index at `https://xras.ru/js/regions`, which
+contains the API code, display name, and Latin slug for each region. You can
+therefore enter, for example, “Moscow”, “Krasnodar”, “New York”, `moscow`,
+`saint_petersburg`, or the code itself, such as `RAL5`/`RIK0`. Name comparison
+ignores case, `_`/`-` separators, and the difference between `ё`/`е`.
+
+A successfully downloaded index is cached in Home Assistant memory for one
+hour. If XRAS subsequently becomes temporarily unable to serve the index, the
+last successful cache is used. For compatibility, legacy known Russian aliases
+and explicit Latin slugs may also be resolved through the region page even
+when the index is unavailable.
+
+If one display name corresponds to multiple regions, the integration does not
+choose the first one at random: the form asks you to specify a Latin slug or
+API code. For example, the current XRAS index contains two regions named
+“Hamilton” — `hamilton_canada` (`HD5U`) and `hamilton_new_zeland` (`HRFI`).
+
+If automatic detection does not work, you can find the code yourself: open
+your region's page and hover over the “API: JSON” link below the chart. It
+will contain something like `.../txt/kp_RAL5.json`.
+
+A regional code is preferable to the `UP03` zone: regional files account for
+daylight saving time, whereas `UP03` is a fixed offset. For Moscow there is no
+difference (it uses UTC+3 all year), but Riga switches to UTC+2 in winter.
+
+The integration tries JSON first and automatically falls back to TXT if it is
+unavailable; both formats are parsed identically. An unknown time zone is not
+replaced with UTC: the required file is considered invalid so that the Kp value
+for the wrong three-hour interval is not displayed.
+
+## Installation
+
+1. Copy `custom_components/xras_geomagnetic` to `<config>/custom_components/`.
+2. Restart Home Assistant.
+3. **Settings → Devices & services → Add integration → XRAS**.
+4. Enter a region (“Moscow”) or code (`RAL5`) and the polling interval. The
+   value is validated immediately: if the region is not found or the data
+   cannot be downloaded or parsed, the form displays the corresponding error.
+
+Via HACS: *Custom repositories* → repository URL → type *Integration*.
+
+The region code is the identity of the config entry and cannot be changed
+after creation. In **Configure**, you can change the polling interval and
+enable historical loading of daily maximum Kp values. If you need a different
+region, delete the entry and create a new one so that the histories of
+different regions are not mixed.
+
+When older version 2 config entries are updated, they are migrated
+automatically: if the region was previously changed through Options, the code
+actually in use is moved to the main configuration and becomes the entry's
+`unique_id`. If this conflicts with an existing entry for the same region,
+migration stops instead of creating a duplicate.
+
+## Historical Kp Statistics
+
+Historical loading is **disabled by default** so that installing the
+integration does not create additional requests to XRAS. In **Configure**, the
+“History to load, months” option can be set from `1` to `24`; `0` completely
+disables further history synchronization. Recorder must be enabled for this
+feature; without it, regular XRAS entities continue to work, but backfill does
+not start.
+
+The XRAS archive `kpm_<code>_YYYYMM` contains only the **maximum Kp for each
+calendar day**. This file does not contain the original three-hour values, so
+the integration does not mix the archive into the `kp_current` sensor's
+Long-Term Statistics: doing so would distort its `min`/`mean`/`max`. Instead,
+a separate external statistic is created:
+
+```text
+xras_geomagnetic:kp_daily_max_ral5
+```
+
+The last part is the lowercase region code (`RIK0` →
+`xras_geomagnetic:kp_daily_max_rik0`). You can use this statistic directly in
+Home Assistant cards, for example:
+
+```yaml
+type: statistics-graph
+entities:
+  - xras_geomagnetic:kp_daily_max_ral5
+days_to_show: 365
+period: day
+stat_types:
+  - max
+```
+
+No additional requests are made for the current month: daily maxima are taken
+from the regular `kpm_<code>` file, which the coordinator already downloads.
+For completed months, the `kpm_<code>_YYYYMM` archives are used: they are
+requested sequentially with a pause of at least 5 minutes. Older, fully
+imported months are not downloaded again. The most recent completed month is
+deliberately checked against its archive once per manager lifecycle (and after
+the transition to a new month), even if its last day is already in Recorder:
+XRAS may switch the live `kpm_<code>` file to a new month before it contains
+the final maximum for the last day. The archive check authoritatively
+overwrites such a point. A partially imported older month remains a candidate
+for recovery.
+
+After queuing statistics in Recorder, the integration waits for the commit
+barrier and reads the corresponding rows back. Only then is the current
+snapshot considered synchronized, and an archived month increments the
+successfully imported month counter. If Recorder has not saved the expected
+rows, backfill enters the same `retry_wait` state instead of reporting success
+prematurely.
+
+After a network error, XRAS unavailability, or an ambiguous failure of one of
+the archive formats, backfill pauses for at least 6 hours and does not skip the
+failed month; the number of such network attempts is unlimited. If both formats
+are available or absent (`404`), but the available content is invalid (a parse
+error, a month mismatch, or an excessive size), up to **three attempts** are
+made with a pause of at least 6 hours between them. After the third error, the
+month is marked as `archive_invalid_skipped` until the integration is
+restarted, and processing of the remaining months continues with the usual
+interval of at least 5 minutes between requests.
+
+A missing old archive (`404`) is remembered until the integration is
+restarted. The exception is the **most recent completed month**: after the
+transition to the next month, XRAS may publish its archive with a delay. On a
+`404`, that month is marked as `fresh_archive_pending` and checked again no
+sooner than 6 hours later; older months can still be imported during the
+current pass. If the archive has not appeared by the next month transition,
+its `404` is handled like that of a regular old archive. Retries run on
+subsequent successful coordinator updates after the cooldown; there is no
+separate permanent timer.
+
+History errors do not affect regular XRAS entities. Diagnostics show
+`archive_invalid_attempts`, `archive_invalid_skipped`,
+`fresh_archive_pending`, `archive_not_found`, the backfill state, and the
+reason for the last error. Attempt counters and skip lists live in manager
+memory and are reset when the integration is restarted; statistics already
+written are retained. The `history_backfill.archive_imported_months` field
+contains a sorted list of `YYYY-MM` months successfully confirmed through
+Recorder during the current manager lifecycle. This list and
+`imported_archive_months_this_session` are reset when the integration is
+restarted; the saved statistical data itself is not deleted.
+
+Each value is written with a neutral time marker **around noon on the XRAS
+source's calendar day**, rather than at a fixed `12:00 UTC`. First, `12:00` in
+the source time zone is taken; then the marker is rounded down to a whole UTC
+hour, as required for Recorder hourly statistics. Therefore, for a whole-hour
+zone offset this is exactly 12:00 local time, while for UTC+05:30, for example,
+it is 11:30 local time. The marker remains within the source day and does not
+move the date to an adjacent day, even for UTC+12…UTC+14. This is **not the
+time when the maximum occurred**: XRAS reports only the daily value and does
+not report the three-hour interval in which it was reached. For the current
+day, the point appears only after this already aligned marker has passed, so
+no future statistical marker is created in Recorder.
+
+Reducing the history depth or disabling backfill (`0`) stops further
+synchronization of the corresponding older months, but does not delete
+Long-Term Statistics already imported into Recorder.
+
+## Entities
+
+| Key | Meaning |
+| --- | --- |
+| `kp_current` | Current Kp only for the active three-hour interval |
+| `storm_level` | Quiet / Active / G1–G5 storms |
+| `kp_max_today` | `max_kp` for today |
+| `kp_max_24h` | Maximum actual value over the past 24 hours |
+| `kp_max_month` | Maximum for the current month; attributes contain daily history |
+| `storm_days_month` | Number of days in the month that reached Kp ≥ 5 |
+| `kp_forecast_max_24h` | Maximum forecast for the next 24 hours |
+| `kp_forecast_max_3d` | Maximum of the available three-day forecast |
+| `ap` | Ap (the `forecast` attribute contains the forecast strictly for tomorrow) |
+| `f10` | F10.7, s.f.u. (the `forecast` attribute contains the forecast strictly for tomorrow) |
+| `sn` | Sunspot number; disabled by default |
+| `storm` | Binary sensor: `on` when Kp ≥ 5 in the current valid interval |
+| `storm_forecast` | Binary sensor: `on` if Kp ≥ 5 is forecast within the next 24 hours |
+
+Daily `Ap` is the average of eight three-hour `ap` indices, so it is not
+declared as `state_class: measurement`: it is a daily aggregate, not a current
+measurement. `F10.7` and `SN` retain `measurement` as the latest available
+observed values. For all three values, if there is no new row for today, the
+integration may show the latest available value from a previous day: this is
+not a forecast and does not guarantee that the value is current for today.
+After `state_class` is removed from `Ap`, new Long-Term Statistics are no
+longer generated for this sensor; values already recorded by Recorder are
+retained.
+
+The current Kp sensor has `measured_at` and `valid_until` attributes. At a slot
+boundary, the integration does not publish an artificial intermediate
+`unknown`: after a short random delay of 5–60 seconds, it requests the new
+slot. If XRAS has already updated, the state changes directly from the old Kp
+to the new one; if the new slot is not yet available, it changes to `unknown`;
+if a required request fails, the entities normally become `unavailable`. Up to
+three retries are then made no more often than once every 5 minutes, also with
+a small jitter. In the `unknown` state, the `measured_at` and `valid_until`
+attributes retain the boundaries of the last actual slot, making it clear why
+the value is no longer considered current.
+
+If Home Assistant starts or a regular poll falls into a short “gap” between
+slots, the integration starts the same bounded recovery if the last
+`valid_until` expired no more than 15 minutes ago. Older gaps do not create
+additional burst requests and wait for the regular polling interval.
+
+### Entity ID
+
+The exact `entity_id` is not part of the integration API. Entities use
+`has_entity_name=True`: Home Assistant builds the initial object ID from the
+device name (`XRAS {code}`) and the entity name. For languages that HA does not
+use for native entity IDs (including Russian), the object ID uses the
+translation in the default language, so a Russian display name does not imply
+Cyrillic transliteration in the `entity_id`. IDs that have already been
+created or manually renamed are preserved.
+
+Therefore, before copying YAML, get the actual IDs from **Settings → Devices &
+services → XRAS → Entities**. The examples below deliberately use explicit
+placeholder IDs such as `sensor.your_kp_entity` — replace them with your own.
+
+### Level Keys vs. Translated Text
+
+The conditions level is stored everywhere as a key: `quiet`, `active`,
+`g1`…`g5`. This applies both to the state of the geomagnetic conditions ENUM
+sensor and to the `level_key` attributes of the binary sensors and forecast Kp.
+In automation conditions, compare against the key: it does not depend on the
+interface language and will not change when wording changes.
+
+Home Assistant itself supplies the translated text (“Minor storm (G1)”) when
+displaying the entity, so there is no need to duplicate it in attributes: if
+the name is required in a template or notification, take it from the ENUM
+sensor's state, where it is already localized:
+
+```jinja
+{{ states('sensor.your_storm_level_entity') }}
+{{ state_attr('binary_sensor.your_storm_now_entity', 'level_key') }}
+```
+
+Entity and state names come from `translations/`, so they will be in English
+in an English-language interface.
+
+Monthly sensors depend on the `kpm_*` file: if it is unavailable, they remain
+empty (`unknown`) rather than substituting values from the three-day file. The
+availability status of the required and optional datasets can be viewed in the
+integration entry's diagnostics.
+
+### Level Scale
+
+As on the website: **Quiet** — Kp < 4, **Active** — 4 ≤ Kp < 5, **G1…G5
+storms** — Kp from 5 to 9. Verified against the colors of the monthly chart:
+August 2 and 8 (Kp = 5.67) are red, August 3 and 4 (4.33 and 4.00) are orange,
+and August 9 (3.67) is green.
+
+### Kp Rounding and Notation
+
+The Kp file contains fractional values in thirds: `1.33`, `1.67`, `2.67`,
+`3.33`. The sensor state is the exact fractional value (which is more
+convenient for automations, charts, and thresholds), while two human-readable
+representations are available in attributes:
+
+* `kp_display` — an integer rounded “half up” (`math.floor(kp + 0.5)`, via
+  `decimal.ROUND_HALF_UP`). The built-in `round()` is unsuitable here because
+  it rounds to even, meaning `round(2.5) == 2`. Exact halves do not occur in
+  real data expressed in thirds, so this is future-proofing.
+* `kp_notation` — the familiar notation in thirds, as used in summaries on the
+  website: `1.67` → `2-`, `7.33` → `7+`, `8.00` → `8`.
+
+The current Kp attributes also contain `series` (actual values for 3 days) and
+`forecast_series` (forecast) — ready-made series for charts.
+
+## Cards
+
+```yaml
+type: entities
+title: Geomagnetic conditions
+entities:
+  - entity: sensor.your_storm_level_entity
+  - entity: sensor.your_kp_entity
+  - entity: sensor.your_kp_forecast_24h_entity
+  - entity: sensor.your_ap_entity
+  - entity: sensor.your_f107_entity
+  - entity: binary_sensor.your_storm_forecast_entity
+```
+
+“Actual + forecast” chart ([ApexCharts Card](https://github.com/RomRider/apexcharts-card)):
+
+```yaml
+type: custom:apexcharts-card
+header:
+  show: true
+  title: Kp index — actual and forecast
+graph_span: 6d
+span:
+  start: day
+  offset: "-3d"
+series:
+  - entity: sensor.your_kp_entity
+    name: Actual
+    type: column
+    color: "#00e000"
+    data_generator: |
+      return entity.attributes.series
+        .map(p => [new Date(p.time).getTime(), p.kp]);
+  - entity: sensor.your_kp_entity
+    name: Forecast
+    type: column
+    color: "#4a9eff"
+    opacity: 0.5
+    data_generator: |
+      return entity.attributes.forecast_series
+        .map(p => [new Date(p.time).getTime(), p.kp]);
+yaxis:
+  - min: 0
+    max: 9
+    decimals: 0
+```
+
+Tile with level-based color (mushroom):
+
+```yaml
+type: custom:mushroom-template-card
+primary: "Kp {{ state_attr('sensor.your_kp_entity','kp_display') }}"
+secondary: "{{ states('sensor.your_storm_level_entity') }}"
+icon: mdi:magnet
+icon_color: >
+  {% set raw = states('sensor.your_kp_entity') %}
+  {% if not is_number(raw) %} disabled
+  {% else %}
+    {% set kp = raw | float %}
+    {% if kp >= 7 %} red
+    {% elif kp >= 5 %} orange
+    {% elif kp >= 4 %} amber
+    {% else %} green {% endif %}
+  {% endif %}
+```
+
+## Automation
+
+```yaml
+automation:
+  - alias: Geomagnetic storm warning
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.your_storm_forecast_entity
+        to: "on"
+    actions:
+      - action: notify.mobile_app
+        data:
+          title: Geomagnetic storm expected
+          message: >
+            {{ states('sensor.your_storm_level_entity') }},
+            forecast Kp up to
+            {{ states('sensor.your_kp_forecast_24h_entity') }}
+```
+
+For a “storm has ended” notification, specify `to: "off"`, not just
+`from: "on"`: then a temporary `unavailable` state caused by a network error
+will not be interpreted as the end of the storm.
+
+## Alternative without the Integration (YAML)
+
+If you do not want to install the component, use the standard `rest` sensor.
+The data in the file runs from newer days to older days. The example below is
+specifically for the Moscow UTC+03 file; regions with a different time-zone
+phase may have a different set of `hXX` fields and local-time rules.
+
+```yaml
+rest:
+  - resource: https://xras.ru/txt/kp_RAL5.json
+    scan_interval: 600
+    headers:
+      User-Agent: Home Assistant
+    sensor:
+      - name: Daily maximum Kp
+        unique_id: xras_kp_max
+        value_template: "{{ value_json.data[0].max_kp | float }}"
+      - name: Current Kp
+        unique_id: xras_kp_now
+        state_class: measurement
+        value_template: >
+          {% set now_ts = as_timestamp(now()) %}
+          {% set ns = namespace(v=none) %}
+          {% for d in value_json.data if ns.v is none %}
+            {% for h in [21,18,15,12,9,6,3,0] if ns.v is none %}
+              {% set key = 'h%02d' | format(h) %}
+              {% set raw = d[key] %}
+              {% set start = as_timestamp(d.time ~ 'T' ~ ('%02d' | format(h)) ~ ':00:00+03:00') %}
+              {% if raw not in [none, 'null'] and start <= now_ts < start + 10800 %}
+                {% set ns.v = raw | float %}
+              {% endif %}
+            {% endfor %}
+          {% endfor %}
+          {{ ns.v if ns.v is not none else 'unknown' }}
+      - name: Ap
+        unique_id: xras_ap
+        value_template: "{{ value_json.data[0].ap | int }}"
+      - name: F10.7
+        unique_id: xras_f107
+        value_template: "{{ value_json.data[0].f10 | int }}"
+
+  # Monthly export: data[0] is the 31st (still null); use the first non-empty day
+  - resource: https://xras.ru/txt/kpm_RAL5.json
+    scan_interval: 3600
+    headers:
+      User-Agent: Home Assistant
+    sensor:
+      - name: Monthly maximum Kp
+        unique_id: xras_kp_month
+        value_template: >
+          {{ value_json.data
+             | rejectattr('max_kp', 'eq', 'null')
+             | map(attribute='max_kp') | map('float')
+             | list | max }}
+      - name: Storm days in month
+        unique_id: xras_storm_days
+        value_template: >
+          {{ value_json.data
+             | rejectattr('max_kp', 'eq', 'null')
+             | map(attribute='max_kp') | map('float')
+             | select('ge', 5) | list | count }}
+```
+
+Unlike the old approach of “taking the last non-empty hXX”, this template
+checks that the selected Moscow slot actually covers the current moment. It is
+still a simplified fallback and does not replace the integration parser for
+regions with a different phase or DST.
+
+## Development and Tests
+
+CI runs pytest on three explicitly pinned Home Assistant profiles. Each
+profile uses its own `pytest-homeassistant-custom-component`, which pins
+compatible versions of Home Assistant and pytest:
+
+| Profile | Home Assistant | Python | Requirements |
+| --- | --- | --- | --- |
+| minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
+| production | `2026.10.1` | `3.14` | `requirements_test.txt` |
+| latest stable | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+
+For a local run, choose the requirements file matching your Python version.
+For example, the production profile requires Python 3.14:
+
+```bash
+python -m pip install -r requirements_test.txt
+python -m pytest -q
+```
+
+The minimum profile additionally pins `pycares==4.5.0`: the HA 2024.12.0
+dependency allows newer versions without an upper bound, while modern
+`pycares` is already incompatible with the cleanup check in the old test
+harness.
+
+Fixtures in `tests/fixtures/` cover JSON/TXT, reverse date order, string
+`"null"` values, named time zones, and regional slot phase (including UTC+07
+with `h00` as a continuity point).
+
+## Notes
+
+* The data belongs to IKI RAS — credit the source and do not poll the site more
+  often than once every 5 minutes (the integration enforces this; recovery
+  after a slot boundary adds jitter and remains limited to a bounded number of
+  attempts).
+* HTTP response sizes are limited: up to 256 KiB for the JSON/TXT API, up to
+  128 KiB for the region index, and up to 1 MiB for a region page. Larger
+  responses are rejected. During setup, this appears as a regular
+  `cannot_connect` error. At runtime, an oversized required `kp_*` response is
+  treated as an update error, so entities become `unavailable` until the next
+  successful cycle; an oversized optional dataset makes only its data
+  unavailable. The exact reason remains in the debug log.
+* The original source of Kp is NOAA (the `source` field), so the values match
+  NOAA SWPC.
+* Empty values are returned as the string `"null"`: in the three-day file,
+  this is how future three-hour intervals appear; in the monthly file, all
+  days through the end of the month appear this way. They are not included in
+  series or statistics.
+* `kp_` contains the fields `k` and local slots `hXX`. For time zones whose
+  offset is not a multiple of three hours relative to UTC, the slot phase is
+  shifted. For example, for UTC+07 the actual interval starts are `h01`,
+  `h04`, …, `h22`, while XRAS uses `h00` as a chart continuity point and it is
+  not considered a separate three-hour interval.
+* XRAS provides one `tzone` field for the entire three-day file. If a regional
+  file spans a transition to or from daylight saving time, the parser has to
+  apply this single fixed offset to all days in the file. Consequently, slots
+  on the other side of the DST transition may be shifted by one hour until the
+  corresponding days leave the three-day window. After `tzone` changes, the
+  other side of the transition may be shifted instead. This is a limitation of
+  the source format; a zone code such as `UP03` additionally never changes its
+  offset with the season.
+* `kpm_` has no hourly slots — only `time`, `f10`, `sn`, `ap`, `max_kp`. The
+  TXT column order is read from the `# [0] time, ...` header; fallback without
+  a header is allowed only for known schemas and does not guess an unknown file
+  width.
+* The `type` field is the same in both files (`kp`), so it cannot be used to
+  distinguish them — the integration relies on the filename.
+* The website has a monthly archive: `kpm_RAL5_202506.json` — the same format
+  plus the `_YYYYMM` suffix. When historical loading is enabled, the
+  integration uses these files only for the separate daily maximum Kp
+  statistic; the original three-hour series cannot be reconstructed from them.
+
+[**English**](#xras--geomagnetic-conditions-for-home-assistant) | [**Русский**](#xras--геомагнитная-обстановка-для-home-assistant)
+
 # XRAS — Геомагнитная обстановка для Home Assistant
 
 Интеграция берёт данные Лаборатории солнечной астрономии ИКИ РАН
@@ -505,3 +1030,5 @@ Minimum-профиль дополнительно фиксирует `pycares==4
   суффикс `_ГГГГММ`. При включённой исторической загрузке интеграция использует
   эти файлы только для отдельной статистики суточного максимума Kp; восстановить
   из них исходный трёхчасовой ряд невозможно.
+
+[**English**](#xras--geomagnetic-conditions-for-home-assistant) | [**Русский**](#xras--геомагнитная-обстановка-для-home-assistant)
