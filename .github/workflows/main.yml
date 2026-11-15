@@ -34,6 +34,10 @@ jobs:
           - ha: "2026.10.4"
             python: "3.14"
             requirements: requirements_test_latest.txt
+          - ha: "2026.11.0"
+            # Core 2026.11+ supplies first-party pytest helpers.
+            python: "3.14"
+            requirements: requirements_test_2026_11.txt
 
     steps:
       - name: Check out repository
