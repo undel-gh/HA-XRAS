@@ -6,7 +6,12 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+# Home Assistant 2026.11+ ships its own pytest helpers. Older supported
+# versions still use the legacy custom-component testing package.
+try:
+    from pytest_homeassistant.common import MockConfigEntry
+except ModuleNotFoundError:
+    from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 import custom_components.xras_geomagnetic.coordinator as coordinator_module
 from custom_components.xras_geomagnetic.const import (
