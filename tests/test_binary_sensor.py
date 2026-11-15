@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-# Home Assistant 2026.11+ ships its own pytest helpers. Older supported
-# versions still use the legacy custom-component testing package.
-try:
-    from pytest_homeassistant.common import MockConfigEntry
-except ModuleNotFoundError:
-    from pytest_homeassistant_custom_component.common import MockConfigEntry
+from tests._harness import MockConfigEntry
 
 from custom_components.xras_geomagnetic.binary_sensor import XrasStormNow
 from custom_components.xras_geomagnetic.const import (
