@@ -469,7 +469,7 @@ Do not install both harnesses together.
 | minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
 | production | `2026.10.1` | `3.14` | `requirements_test.txt` |
 | last legacy harness | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
-| first-party harness | `2026.11.0` | `3.14` | `requirements_test_2026_11.txt` |
+| first-party harness | `2026.11.1` | `3.14` | `requirements_test_2026_11.txt` |
 
 For a local run, choose the requirements file matching your Python version.
 For example, the production profile requires Python 3.14:
@@ -479,7 +479,7 @@ python -m pip install -r requirements_test.txt
 python -m pytest -q
 ```
 
-To verify HA 2026.11.0 instead, use a **fresh** Python 3.14 environment:
+To verify HA 2026.11.1 instead, use a **fresh** Python 3.14 environment:
 
 ```bash
 python -m pip install -r requirements_test_2026_11.txt
@@ -999,7 +999,7 @@ CI запускает pytest на четырёх явно закреплённы
 | minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
 | production | `2026.10.1` | `3.14` | `requirements_test.txt` |
 | last legacy harness | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
-| first-party harness | `2026.11.0` | `3.14` | `requirements_test_2026_11.txt` |
+| first-party harness | `2026.11.1` | `3.14` | `requirements_test_2026_11.txt` |
 
 Для локального запуска выберите файл requirements, соответствующий вашей
 версии Python. Например, production-профиль требует Python 3.14:
@@ -1009,7 +1009,7 @@ python -m pip install -r requirements_test.txt
 python -m pytest -q
 ```
 
-Для проверки HA 2026.11.0 используйте **чистое** окружение Python 3.14:
+Для проверки HA 2026.11.1 используйте **чистое** окружение Python 3.14:
 
 ```bash
 python -m pip install -r requirements_test_2026_11.txt
