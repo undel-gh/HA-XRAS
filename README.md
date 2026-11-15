@@ -458,15 +458,18 @@ regions with a different phase or DST.
 
 ## Development and Tests
 
-CI runs pytest on three explicitly pinned Home Assistant profiles. Each
-profile uses its own `pytest-homeassistant-custom-component`, which pins
-compatible versions of Home Assistant and pytest:
+CI runs pytest on four explicitly pinned Home Assistant profiles. The first
+three use the legacy `pytest-homeassistant-custom-component` harness (supported
+up through Core 2026.10.4). Starting with 2026.11, Home Assistant provides its
+own `pytest-homeassistant` package, installed in a separate CI environment.
+Do not install both harnesses together.
 
 | Profile | Home Assistant | Python | Requirements |
 | --- | --- | --- | --- |
 | minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
 | production | `2026.10.1` | `3.14` | `requirements_test.txt` |
-| latest stable | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+| last legacy harness | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+| first-party harness | `2026.11.0` | `3.14` | `requirements_test_2026_11.txt` |
 
 For a local run, choose the requirements file matching your Python version.
 For example, the production profile requires Python 3.14:
@@ -475,6 +478,19 @@ For example, the production profile requires Python 3.14:
 python -m pip install -r requirements_test.txt
 python -m pytest -q
 ```
+
+To verify HA 2026.11.0 instead, use a **fresh** Python 3.14 environment:
+
+```bash
+python -m pip install -r requirements_test_2026_11.txt
+python -m pytest -q
+```
+
+On 2026.11+, test helpers import from `pytest_homeassistant`, and custom
+integrations are enabled by default. Older profiles still import from
+`pytest_homeassistant_custom_component` and use the explicit enable fixture.
+The two test harness packages must never be installed in the same environment.
+Each CI job checks the installed Core version, preventing accidental drift.
 
 The minimum profile additionally pins `pycares==4.5.0`: the HA 2024.12.0
 dependency allows newer versions without an upper bound, while modern
@@ -972,15 +988,18 @@ rest:
 
 ## Разработка и тесты
 
-CI запускает pytest на трёх явно закреплённых профилях Home Assistant. Каждый
-профиль использует свой `pytest-homeassistant-custom-component`, который пинит
-совместимые версии Home Assistant и pytest:
+CI запускает pytest на четырёх явно закреплённых профилях Home Assistant.
+Первые три используют старый `pytest-homeassistant-custom-component` (до Core
+2026.10.4 включительно). Начиная с Core 2026.11 Home Assistant предоставляет
+собственный `pytest-homeassistant`, запускаемый в отдельном CI-окружении.
+Устанавливать оба тестовых пакета одновременно нельзя.
 
 | Профиль | Home Assistant | Python | Requirements |
 | --- | --- | --- | --- |
 | minimum supported | `2024.12.0` | `3.12` | `requirements_test_minimum.txt` |
 | production | `2026.10.1` | `3.14` | `requirements_test.txt` |
-| latest stable | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+| last legacy harness | `2026.10.4` | `3.14` | `requirements_test_latest.txt` |
+| first-party harness | `2026.11.0` | `3.14` | `requirements_test_2026_11.txt` |
 
 Для локального запуска выберите файл requirements, соответствующий вашей
 версии Python. Например, production-профиль требует Python 3.14:
@@ -989,6 +1008,19 @@ CI запускает pytest на трёх явно закреплённых п�
 python -m pip install -r requirements_test.txt
 python -m pytest -q
 ```
+
+Для проверки HA 2026.11.0 используйте **чистое** окружение Python 3.14:
+
+```bash
+python -m pip install -r requirements_test_2026_11.txt
+python -m pytest -q
+```
+
+Новый тестовый пакет использует импорты `pytest_homeassistant` и включает
+custom integrations по умолчанию. Старые профили продолжают использовать
+`pytest_homeassistant_custom_component` и явную фикстуру включения.
+Объединять оба тестовых пакета в одном окружении нельзя. Каждый CI job проверяет
+фактическую версию Core, исключая случайный дрейф версий.
 
 Minimum-профиль дополнительно фиксирует `pycares==4.5.0`: у HA 2024.12.0
 зависимость допускает более новые версии без верхней границы, а современный
