@@ -1,0 +1,4 @@
+# First stable HA 2026.11 profile uses Home Assistant's own testing package.
+# Pin both packages to the same release. Do not install the legacy plugin here.
+homeassistant==2026.11.0
+pytest-homeassistant==2026.11.0

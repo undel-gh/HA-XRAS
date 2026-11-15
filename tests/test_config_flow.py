@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant import config_entries
 from homeassistant.data_entry_flow import FlowResultType
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from tests._harness import MockConfigEntry
 
 from custom_components.xras_geomagnetic.config_flow import (
     CannotConnect,

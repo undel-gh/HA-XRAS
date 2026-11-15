@@ -5,7 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from tests._harness import MockConfigEntry
 
 from custom_components.xras_geomagnetic import async_migrate_entry, async_setup_entry
 from custom_components.xras_geomagnetic.const import (

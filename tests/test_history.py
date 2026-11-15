@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from homeassistant.components.recorder import get_instance
 from homeassistant.components.recorder.statistics import statistics_during_period
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from tests._harness import MockConfigEntry
 
 from custom_components.xras_geomagnetic.const import (
     BASE_URL,

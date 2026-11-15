@@ -6,7 +6,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from homeassistant.helpers.update_coordinator import UpdateFailed
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from tests._harness import MockConfigEntry
 
 import custom_components.xras_geomagnetic.coordinator as coordinator_module
 from custom_components.xras_geomagnetic.const import (
