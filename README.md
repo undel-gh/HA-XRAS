@@ -1,6 +1,5 @@
 [![Validate](https://github.com/undel-gh/HA-XRAS/actions/workflows/main.yml/badge.svg)](https://github.com/undel-gh/HA-XRAS/actions/workflows/main.yml)
-[![HACS: Custom](https://img.shields.io/badge/HACS-Custom-orange.svg)](https://hacs.xyz)
-[![Home Assistant Custom Integration](https://img.shields.io/badge/Home%20Assistant-Custom%20Integration-18BCF2?style=flat-square)](https://my.home-assistant.io/redirect/hacs_repository/?owner=undel-gh&repository=HA-XRAS&category=integration)
+[![HACS: Default](https://img.shields.io/badge/HACS-Default-41BDF5.svg)](https://github.com/hacs/default)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [![Open your Home Assistant instance and open the HA-XRAS repository in the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=undel-gh&repository=HA-XRAS&category=integration)
@@ -13,6 +12,68 @@ The integration uses data from the Laboratory of Solar Astronomy at the Space
 Research Institute of the Russian Academy of Sciences (IKI RAS)
 (<https://xras.ru>): actual and forecast Kp index values, as well as Ap, F10.7,
 and the sunspot number.
+
+## Installation
+
+**Recommended: install from the default HACS / Home Assistant Marketplace
+catalog.** XRAS is already listed in [hacs/default](https://github.com/hacs/default);
+you do **not** need to add this GitHub repository under *Custom repositories*.
+XRAS remains a community-maintained custom integration, not a built-in Home
+Assistant Core integration.
+
+### HACS / Marketplace (recommended)
+
+1. Open the catalog for your Home Assistant version:
+   - **2026.11 or newer:** **Settings → Marketplace** (built into Home Assistant).
+   - **2026.10 or older:** open **HACS** in the sidebar. HACS must already be
+     installed; [open this repository in HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=undel-gh&repository=HA-XRAS&category=integration)
+     or search its catalog.
+2. Search for **XRAS** and open **XRAS — Геомагнитная обстановка**.
+3. Select **Install** in Marketplace or **Download** in HACS.
+4. Follow any restart instructions shown by Marketplace. On 2026.10 and older,
+   **restart Home Assistant** after downloading through HACS.
+5. Go to **Settings → Devices & services → Add integration → XRAS** (or use
+   **Add integration** on the repository page if offered).
+6. Enter a region (“Moscow”) or code (`RAL5`) and the polling interval. The
+   value is validated immediately: if the region is not found or the data
+   cannot be downloaded or parsed, the form displays the corresponding error.
+
+Marketplace / HACS will offer future integration updates through its catalog.
+Follow its restart instructions after updating; existing XRAS config entries do
+not need to be recreated.
+
+### Manual installation (fallback)
+
+Use this only if Marketplace / HACS is unavailable or cannot download the
+repository:
+
+1. Download the source archive of the desired release from
+   [GitHub Releases](https://github.com/undel-gh/HA-XRAS/releases).
+2. Copy the **entire** `custom_components/xras_geomagnetic` directory from the
+   archive into your Home Assistant configuration so that the files are at
+   `<config>/custom_components/xras_geomagnetic/`. Create the
+   `custom_components` directory if necessary.
+3. Restart Home Assistant.
+4. Add and configure **XRAS** through **Settings → Devices & services →
+   Add integration**, as described above.
+
+Manual installations do not receive automatic catalog-managed updates; repeat
+the file-copy procedure to update them. Avoid mixing manual file replacement
+with a Marketplace / HACS-managed installation.
+
+### Configuration notes
+
+The region code is the identity of the config entry and cannot be changed
+after creation. In **Configure**, you can change the polling interval and
+enable historical loading of daily maximum Kp values. If you need a different
+region, delete the entry and create a new one so that the histories of
+different regions are not mixed.
+
+When older version 2 config entries are updated, they are migrated
+automatically: if the region was previously changed through Options, the code
+actually in use is moved to the main configuration and becomes the entry's
+`unique_id`. If this conflicts with an existing entry for the same region,
+migration stops instead of creating a duplicate.
 
 ## Data Sources
 
@@ -68,29 +129,6 @@ The integration tries JSON first and automatically falls back to TXT if it is
 unavailable; both formats are parsed identically. An unknown time zone is not
 replaced with UTC: the required file is considered invalid so that the Kp value
 for the wrong three-hour interval is not displayed.
-
-## Installation
-
-1. Copy `custom_components/xras_geomagnetic` to `<config>/custom_components/`.
-2. Restart Home Assistant.
-3. **Settings → Devices & services → Add integration → XRAS**.
-4. Enter a region (“Moscow”) or code (`RAL5`) and the polling interval. The
-   value is validated immediately: if the region is not found or the data
-   cannot be downloaded or parsed, the form displays the corresponding error.
-
-Via HACS: *Custom repositories* → repository URL → type *Integration*.
-
-The region code is the identity of the config entry and cannot be changed
-after creation. In **Configure**, you can change the polling interval and
-enable historical loading of daily maximum Kp values. If you need a different
-region, delete the entry and create a new one so that the histories of
-different regions are not mixed.
-
-When older version 2 config entries are updated, they are migrated
-automatically: if the region was previously changed through Options, the code
-actually in use is moved to the main configuration and becomes the entry's
-`unique_id`. If this conflicts with an existing entry for the same region,
-migration stops instead of creating a duplicate.
 
 ## Historical Kp Statistics
 
@@ -552,6 +590,70 @@ with `h00` as a continuity point).
 (<https://xras.ru>): факт и прогноз индекса Kp, а также Ap, F10.7 и число
 солнечных пятен.
 
+## Установка
+
+**Рекомендуемый способ — из стандартного каталога HACS / Home Assistant
+Marketplace.** XRAS уже включена в [hacs/default](https://github.com/hacs/default):
+**добавлять адрес GitHub-репозитория через *Custom repositories* не нужно**.
+XRAS остаётся пользовательской интеграцией сообщества, а не встроенной
+интеграцией Home Assistant Core.
+
+### HACS / Marketplace (рекомендуется)
+
+1. Откройте каталог в зависимости от версии Home Assistant:
+   - **2026.11 и новее:** **Настройки → Marketplace** (встроен в Home Assistant).
+   - **2026.10 и старее:** откройте **HACS** в боковом меню. HACS должен быть
+     установлен заранее; можно
+     [открыть репозиторий в HACS](https://my.home-assistant.io/redirect/hacs_repository/?owner=undel-gh&repository=HA-XRAS&category=integration)
+     или найти его в каталоге.
+2. Найдите **XRAS** и откройте **XRAS — Геомагнитная обстановка**.
+3. Нажмите **Install** в Marketplace или **Download** в HACS.
+4. Если Marketplace попросит перезапустить Home Assistant, выполните его
+   инструкцию. В HA 2026.10 и старее после загрузки через HACS
+   **перезапустите Home Assistant**.
+5. Откройте **Настройки → Устройства и службы → Добавить интеграцию → XRAS**
+   (либо воспользуйтесь кнопкой добавления интеграции на странице репозитория,
+   если она доступна).
+6. Введите регион («Москва») или код (`RAL5`) и интервал опроса. Значение
+   проверяется сразу: если регион не найден или данные не скачались/не
+   разобрались, форма покажет соответствующую ошибку.
+
+Новые версии интеграции будут предлагаться через Marketplace / HACS. После
+обновления следуйте указаниям интерфейса о перезапуске; заново создавать
+существующие записи конфигурации XRAS не требуется.
+
+### Ручная установка (резервный способ)
+
+Используйте её только при недоступности Marketplace / HACS или невозможности
+скачать репозиторий через каталог:
+
+1. Скачайте архив исходного кода нужного релиза в разделе
+   [GitHub Releases](https://github.com/undel-gh/HA-XRAS/releases).
+2. Скопируйте **всю папку** `custom_components/xras_geomagnetic` из архива в
+   каталог конфигурации Home Assistant. В результате файлы должны находиться
+   по пути `<config>/custom_components/xras_geomagnetic/`. При необходимости
+   создайте папку `custom_components`.
+3. Перезапустите Home Assistant.
+4. Добавьте и настройте **XRAS** через **Настройки → Устройства и службы →
+   Добавить интеграцию**, как описано выше.
+
+При ручной установке обновления из каталога автоматически не управляются:
+для обновления повторите копирование файлов. Не смешивайте ручную замену
+файлов с установкой, управляемой Marketplace / HACS.
+
+### Примечания по настройке
+
+Код региона является идентичностью записи и после создания не меняется.
+В **Настроить** можно изменить интервал опроса и включить историческую загрузку
+суточных максимумов Kp. Если нужен другой регион, удалите запись и создайте
+новую — так история разных регионов не смешивается.
+
+При обновлении старых записей конфигурации версии 2 выполняется автоматическая
+миграция: если регион ранее меняли через Options, фактически используемый код
+переносится в основную конфигурацию и становится `unique_id` записи. При
+конфликте с уже существующей записью того же региона миграция останавливается,
+а не создаёт дубликат.
+
 ## Источники данных
 
 Все файлы лежат в `https://xras.ru/txt/` и называются `<префикс>_<код>.json`
@@ -605,28 +707,6 @@ with `h00` as a continuity point).
 TXT — обе схемы разбираются одинаково. Неизвестная часовая зона не
 подменяется на UTC: обязательный файл считается некорректным, чтобы не
 показывать Kp не того трёхчасового интервала.
-
-## Установка
-
-1. Скопируйте `custom_components/xras_geomagnetic` в `<config>/custom_components/`.
-2. Перезапустите Home Assistant.
-3. **Настройки → Устройства и службы → Добавить интеграцию → XRAS**.
-4. Введите регион («Москва») или код (`RAL5`) и интервал опроса. Значение
-   проверяется сразу: если регион не найден или данные не скачались/не
-   разобрались, форма покажет соответствующую ошибку.
-
-Через HACS: *Custom repositories* → адрес репозитория → тип *Integration*.
-
-Код региона является идентичностью записи и после создания не меняется.
-В **Настроить** можно изменить интервал опроса и включить историческую загрузку
-суточных максимумов Kp. Если нужен другой регион, удалите запись и создайте
-новую — так история разных регионов не смешивается.
-
-При обновлении старых записей конфигурации версии 2 выполняется автоматическая
-миграция: если регион ранее меняли через Options, фактически используемый код
-переносится в основную конфигурацию и становится `unique_id` записи. При
-конфликте с уже существующей записью того же региона миграция останавливается,
-а не создаёт дубликат.
 
 ## Историческая статистика Kp
 
